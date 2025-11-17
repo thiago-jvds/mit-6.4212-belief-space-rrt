@@ -1,0 +1,13 @@
+# MIT 6.4212 Course Library 
+--extra-index-url https://drake-packages.csail.mit.edu/whl/nightly
+manipulation==2025.10.15
+
+# Standard Science Stack
+numpy
+scipy
+matplotlib
+
+# Tools for Configuration and Notebooks
+pyyaml
+ipykernel
+notebook

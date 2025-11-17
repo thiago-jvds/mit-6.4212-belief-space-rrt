@@ -224,3 +224,6 @@ results/
 *.log
 *.csv
 *.bag
+
+# Vscode
+.vscode/

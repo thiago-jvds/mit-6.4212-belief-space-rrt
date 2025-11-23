@@ -67,7 +67,7 @@ class CameraWrapper:
         """
 
         def _noise_per_pixel(pixel_value):
-            return np.random.normal(pixel_value, sigma * pixel_value)
+            return np.random.normal(pixel_value, sigma * 0.025 * (pixel_value ** 2))
 
         return np.vectorize(_noise_per_pixel)(depth_image)
 

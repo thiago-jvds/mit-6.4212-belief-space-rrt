@@ -39,7 +39,7 @@ directives:
     parent: world
     child: shelves::shelves_body
     X_PC:
-      translation: [ 1.2, 0, 0.3995 ] # was 0.9057, now ~25cm further in +x
+      translation: [ 1.2, 0, 0.3995 ]
       rotation: !Rpy { deg: [ 0, 0, 180 ] }
 
 # 6. Add the Target Object
@@ -52,21 +52,22 @@ directives:
     parent: shelves::shelves_body
     child: target_object::base_link_mustard
     X_PC:
-      translation: [ 0, 0, 0.23 ] # On the shelf
+      translation: [ 0, 0, 0 ]
       rotation: !Rpy { deg: [ -90, 0, -90 ] }
 
 # 7. Add the Camera (Physical Body)
-# We weld a camera box to the gripper so it moves with the hand
+# We weld a camera box to the top of last link 
+# so it moves with the hand
 - add_model:
     name: wrist_camera
     file: package://manipulation/camera_box.sdf
 
 - add_weld:
-    parent: wsg::body
+    parent: iiwa::iiwa_link_7
     child: wrist_camera::base
     X_PC:
-      translation: [ 0, 0.03, 0 ] # Mounted slightly "above" the gripper (in gripper frame)
-      rotation: !Rpy { deg: [ -90, 180, 0 ] } # Looking forward
+      translation: [ -0.095, 0, 0 ] # Mounted slightly "above" the gripper (in gripper frame)
+      rotation: !Rpy { deg: [ -180, 180, 90 ] } # Looking forward
 
 # 8. Define the Sensors
 # This tells Drake to render images from the camera body we just added

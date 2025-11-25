@@ -16,6 +16,8 @@ directives:
 - add_weld:
     parent: world
     child: iiwa::iiwa_link_0
+    X_PC:
+      translation: [ -0.5, 0, 0 ]
 
 # 3. Add the WSG Gripper
 - add_model:
@@ -39,7 +41,7 @@ directives:
     parent: world
     child: shelves::shelves_body
     X_PC:
-      translation: [ 1.2, 0, 0.3995 ]
+      translation: [ 0.5, 0, 0.3995 ]
       rotation: !Rpy { deg: [ 0, 0, 180 ] }
 
 # 6. Add the Target Object

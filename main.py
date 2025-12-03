@@ -7,104 +7,197 @@ until you press Ctrl+C.
 
 Usage:
     python main.py
-    
+
 Then open http://localhost:7000 in your browser.
 """
 
 import numpy as np
+import time
 from pathlib import Path
-from manipulation.station import MakeHardwareStation, load_scenario
+from manipulation.station import MakeHardwareStation, LoadScenario
+from manipulation.meshcat_utils import AddMeshcatTriad
 from pydrake.all import (
     DiagramBuilder,
     Simulator,
     Meshcat,
     MeshcatParams,
     ConstantVectorSource,
+    Box,
+    Rgba,
+    RigidTransform,
+    RotationMatrix,
 )
+import argparse
+from src.perception.light_and_dark import LightDarkRegionSystem
+from src.simulation.sim_setup import IiwaProblemBelief
+from src.planning.standard_rrt import rrt_planning
+from src.planning.belief_space_rrt import rrbt_planning
+from src.simulation.sim_setup import visualize_noisy_execution
+from src.utils.config_loader import load_rrbt_config
+
 
 def main():
+    parser = argparse.ArgumentParser(description="MIT 6.4212 Robot Simulation")
+    parser.add_argument(
+        "--visualize",
+        type=str,
+        nargs="?",
+        const=True,
+        default=True,
+        help="Enable/Disable Meshcat visualization (True/False)",
+    )
+    parser.add_argument(
+        "--planner",
+        type=str,
+        default="rrbt",
+        choices=["rrt", "rrbt"],
+        help="Which planner to run",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("MIT 6.4212 - Belief-Space RRT")
     print("Robot Manipulation Visualization")
     print("=" * 60)
-    
-    # Create Meshcat on port 7000 specifically
-    print("\nStarting Meshcat on port 7000...")
+
+    config = load_rrbt_config()
+    print("Loaded Configuration:")
+    print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
+    print(f"    > Planner: MaxUncert={config.planner.max_uncertainty}, LightBias={config.planner.prob_sample_light}")
+    print()
+
     try:
         params = MeshcatParams()
         params.port = 7000
         meshcat = Meshcat(params=params)
-        print(f"✓ Meshcat is running at: {meshcat.web_url()}")
-        print(f"  Open this URL in your browser: {meshcat.web_url()}")
     except RuntimeError as e:
-        print(f"\n✗ ERROR: Could not start Meshcat on port 7000")
+        print("\n✗ ERROR: Could not start Meshcat on port 7000")
         print(f"  {e}")
-        print(f"\n  Port 7000 is likely already in use.")
-        print(f"  Please stop any other Meshcat servers or Python processes using that port.")
+        print("\n  Port 7000 is likely already in use.")
+        print(
+            "  Please stop any other Meshcat servers or Python processes using that port."
+        )
         raise
-    
-    # Load the scenario
-    print("\nLoading scenario from config/scenario.yaml...")
+
     scenario_path = Path(__file__).parent / "config" / "scenario.yaml"
-    
+
     with open(scenario_path, "r") as f:
-        scenario = load_scenario(data=f.read())
-    print("✓ Scenario loaded")
-    
-    # Build the system
-    print("\nBuilding robot system...")
+        scenario = LoadScenario(data=f.read())
+
     builder = DiagramBuilder()
-    station = builder.AddSystem(
-        MakeHardwareStation(scenario=scenario, meshcat=meshcat)
+    station = builder.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=meshcat))
+
+    plant = station.GetSubsystemByName("plant")
+
+    # ====== Perception system ======
+    perception_sys = builder.AddSystem(
+        LightDarkRegionSystem(
+            plant=plant,
+            light_region_center=config.simulation.light_center,
+            light_region_size=config.simulation.light_size,
+            sigma_light=np.sqrt(float(config.physics.meas_noise_light)),
+            sigma_dark=np.sqrt(float(config.physics.meas_noise_dark)),
+        )
     )
-    
-    # Set robot joint positions (poses the robot)
-    iiwa_position_source = builder.AddSystem(
-        ConstantVectorSource(np.array([0, 0.1, 0, -1.2, 0, 0.8, 0]))
-    )
+
     builder.Connect(
-        iiwa_position_source.get_output_port(),
-        station.GetInputPort("iiwa.position")
+        station.GetOutputPort("iiwa.position_measured"),
+        perception_sys.GetInputPort("iiwa.position"),
     )
-    
-    # Set gripper position (0.1m = fully open)
+
+    # Set robot joint positions
+    q_home = config.simulation.q_home
+    iiwa_position_source = builder.AddSystem(ConstantVectorSource(q_home))
+    builder.Connect(
+        iiwa_position_source.get_output_port(), station.GetInputPort("iiwa.position")
+    )
+
     wsg_position_source = builder.AddSystem(ConstantVectorSource([0.1]))
     builder.Connect(
-        wsg_position_source.get_output_port(),
-        station.GetInputPort("wsg.position")
+        wsg_position_source.get_output_port(), station.GetInputPort("wsg.position")
     )
-    
+
     # Build diagram and create simulator
     diagram = builder.Build()
     simulator = Simulator(diagram)
     simulator.set_target_realtime_rate(1.0)
-    
-    print("✓ System built successfully")
-    
-    print("\n" + "=" * 60)
-    print("VISUALIZATION READY")
-    print("=" * 60)
-    print(f"Meshcat URL: {meshcat.web_url()}")
-    print("\nThe robot scene is now visible in your browser.")
-    print("Press Ctrl+C to exit.")
-    print("=" * 60)
-    
-    # Run simulation and keep it alive
-    try:
-        print("\nSimulation running...")
-        # Advance to initialize the visualization
-        simulator.AdvanceTo(0.1)
-        
-        # Keep running indefinitely
-        import time
-        while True:
-            time.sleep(1)
-            
-    except KeyboardInterrupt:
-        print("\n\nShutting down...")
-        print("Goodbye!")
+
+    if args.visualize == "True":
+        meshcat.SetObject(
+            "light_region_indicator",
+            Box(*config.simulation.light_size),
+            Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
+        )
+        meshcat.SetTransform(
+            "light_region_indicator", RigidTransform(RotationMatrix(), config.simulation.light_center)
+        )
+
+    simulator.AdvanceTo(0.1)
+
+    print("\n" + "=" * 40)
+    print(f"RUNNING PLANNER: {args.planner.upper()}")
+    print("=" * 40)
+
+    q_start = q_home
+    q_goal = config.simulation.q_goal
+
+    plant_context = plant.CreateDefaultContext()
+    iiwa = plant.GetModelInstanceByName("iiwa")
+
+    # 2. Set the plant to q_goal
+    plant.SetPositions(plant_context, iiwa, q_goal)
+
+    # 3. Calculate Pose of the Gripper (wsg body)
+    # Note: Ensure "body" is the correct link name for your gripper in the SDF
+    wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
+    X_Goal = plant.EvalBodyPoseInWorld(plant_context, wsg_body)
+
+    # 4. Draw the Triad
+    AddMeshcatTriad(meshcat, "goal_pose", length=0.2, radius=0.005)
+    meshcat.SetTransform("goal_pose", X_Goal)
+
+    problem = IiwaProblemBelief(
+        q_start=q_start,
+        q_goal=q_goal,
+        gripper_setpoint=0.1,
+        meshcat=meshcat,
+        light_center=config.simulation.light_center,
+        light_size=config.simulation.light_size,
+        Q_uncertainty=float(config.physics.process_noise_scale),
+        R_light_uncertainty=float(config.physics.meas_noise_light),
+        R_dark_uncertainty=float(config.physics.meas_noise_dark),
+    )
+
+    path = None
+    if args.planner == "rrt":
+        print("Running Standard RRT...")
+        path, k = rrt_planning(
+            problem,
+            max_iterations=config.planner.max_iterations,
+            prob_sample_q_goal=float(config.planner.prob_sample_goal),
+        )
+    elif args.planner == "rrbt":
+        print("Running RRBT...")
+        path, k = rrbt_planning(
+            problem,
+            max_iterations=config.planner.max_iterations,
+            max_uncertainty=float(config.planner.max_uncertainty),
+            prob_sample_q_goal=float(config.planner.prob_sample_goal),
+            prob_sample_q_light=float(config.planner.prob_sample_light),
+            q_light_hint=config.planner.q_light_hint,
+        )
+
+    # 4. Visualize Noisy Execution if path found
+    if path:
+        print(f"✓ Path found ({k} iters). Replaying with NOISE...")
+        visualize_noisy_execution(problem, path, meshcat)
+    else:
+        print("✗ No path found.")
+
+    print("\nSimulation complete. Press Ctrl+C to exit.")
+    while True:
+        time.sleep(0.1)
 
 
 if __name__ == "__main__":
     main()
-

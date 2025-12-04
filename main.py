@@ -32,7 +32,7 @@ from src.perception.light_and_dark import LightDarkRegionSystem
 from src.simulation.sim_setup import IiwaProblemBelief
 from src.planning.standard_rrt import rrt_planning
 from src.planning.belief_space_rrt import rrbt_planning
-from src.simulation.sim_setup import visualize_noisy_execution, visualize_belief_path
+from src.simulation.sim_setup import visualize_noisy_execution, visualize_belief_path, visualize_belief_tree
 from src.utils.config_loader import load_rrbt_config
 
 
@@ -203,6 +203,11 @@ def main():
         )
     elif args.planner == "rrbt":
         print("Running RRBT...")
+        
+        # Create visualization callback for debugging the belief tree
+        def tree_viz_callback(rrbt_tree, iteration):
+            visualize_belief_tree(rrbt_tree, problem, meshcat, iteration)
+        
         path, k = rrbt_planning(
             problem,
             max_iterations=config.planner.max_iterations,
@@ -210,6 +215,8 @@ def main():
             prob_sample_q_goal=float(config.planner.prob_sample_goal),
             prob_sample_q_light=float(config.planner.prob_sample_light),
             q_light_hint=config.planner.q_light_hint,
+            visualize_callback=tree_viz_callback,
+            visualize_interval=1,  # Visualize every iteration
         )
 
     # 4. Visualize Noisy Execution if path found
@@ -219,11 +226,11 @@ def main():
         # Debug the belief path
         debug_path_beliefs(problem, path)
         
-        # Visualize the belief path before noisy execution
-        visualize_belief_path(problem, path, meshcat)
+        # # Visualize the belief path before noisy execution
+        # visualize_belief_path(problem, path, meshcat)
 
         # visualize_noisy_execution(problem, path, meshcat)
-        print(f"\n\t✓ Path found in ({k+1} iters).")
+        print(f"\n✓ Path found in ({k+1} iters).")
     else:
         print("✗ No path found.")
 

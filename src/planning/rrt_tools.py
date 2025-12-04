@@ -114,6 +114,45 @@ class RRBT_tools(RRT_tools):
             node = node.parent
         return path[::-1]
 
+    def try_connect_to_goal(self, tol=0.15):
+        """
+        Greedy attempt to connect the closest tree node to the goal.
+        Returns the goal node if successful, None otherwise.
+        """
+        goal = self.problem.goal
+        
+        # Find the node closest to the goal
+        dists = [
+            self.problem.cspace.distance(n.value, goal) for n in self.rrbt_tree.nodes
+        ]
+        nearest_idx = np.argmin(dists)
+        node_near = self.rrbt_tree.nodes[nearest_idx]
+        
+        # If already at goal, return it
+        if dists[nearest_idx] < tol:
+            return node_near
+        
+        # Try to extend from nearest node to goal
+        qs = self.calc_intermediate_qs_wo_collision(node_near.value, goal)
+        if not qs:
+            return None
+        
+        curr_parent = node_near
+        for q_next in qs:
+            neighbors = self.rrbt_tree.get_nearest_neighbors(q_next, k=10)
+            new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
+            
+            if new_node is None:
+                break  # Uncertainty too high
+            
+            curr_parent = new_node
+            
+            # Check if we reached the goal
+            if self.problem.cspace.distance(curr_parent.value, goal) < tol:
+                return curr_parent
+        
+        return None
+
     def print_stats(self):
         total = (
             self.accepted_nodes + self.rejected_collision + self.rejected_uncertainty

@@ -54,113 +54,67 @@ class RRT_tools:
         return path
 
 class RRBT_tools(RRT_tools):
-    def __init__(self, problem, max_uncertainty: float = 0.1) -> None:
+    def __init__(
+        self, problem, max_uncertainty: float = 0.01, initial_uncertainty: float = 1.0
+    ) -> None:
         self.problem = problem
         self.MAX_UNCERTAINTY = max_uncertainty
 
-        self.rrbt_tree = RRBT_Tree(problem, problem.start, max_uncertainty)
+        self.rrbt_tree = RRBT_Tree(
+            problem, problem.start, max_uncertainty, initial_uncertainty
+        )
 
-        self.rejected_collision = 0
-        self.accepted_nodes = 0
-        self.rejected_uncertainty = 0
 
     def sample_node(self):
         return self.problem.cspace.sample()
 
     def extend_towards(self, q_rand):
-        """
-        Steers towards q_rand and inserts nodes using RRBT logic.
-        """
-        # 1. Nearest (Geometric)
-        # We use the tree's internal list of nodes
-        # Find closest node in tree to q_rand
         dists = [
             self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_tree.nodes
         ]
         nearest_idx = np.argmin(dists)
         node_near = self.rrbt_tree.nodes[nearest_idx]
 
-        # 2. Interpolate (Geometric path)
         qs = self.calc_intermediate_qs_wo_collision(node_near.value, q_rand)
         if not qs:
-            print("Extend: no progress possible (collision)")
             return node_near
 
         curr_parent = node_near
-
-        # 3. Insert Step-by-Step
         for q_next in qs:
-            # Find neighbors for RRT* rewiring (radius ~ 2.0 or dynamic)
             neighbors = self.rrbt_tree.get_nearest_neighbors(q_next, k=10)
-
-            # The Tree handles ChooseParent + Rewire
             new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
-
             if new_node is None:
-                print("Extend: InsertNode failed (uncertainty too high)")
-                break  # Propagation failed
-
+                break
             curr_parent = new_node
 
         return curr_parent
 
-    def node_reaches_goal(self, node, tol=0.1):
-        return self.problem.cspace.distance(node.value, self.problem.goal) < tol
-
-    def backup_path(self, node):
-        path = []
-        while node:
-            path.append(node.value)
-            node = node.parent
-        return path[::-1]
-
-    def try_connect_to_goal(self, tol=0.15):
+    def node_reaches_goal(self, node, tol=None):
         """
-        Greedy attempt to connect the closest tree node to the goal.
-        Returns the goal node if successful, None otherwise.
+        Active Perception Termination Condition:
+        We stop ONLY when we are confident about the target's location.
+        We DO NOT check if the robot is geometrically at the goal (we don't know where it is!).
         """
-        goal = self.problem.goal
-        
-        # Find the node closest to the goal
-        dists = [
-            self.problem.cspace.distance(n.value, goal) for n in self.rrbt_tree.nodes
-        ]
-        nearest_idx = np.argmin(dists)
-        node_near = self.rrbt_tree.nodes[nearest_idx]
-        
-        # If already at goal, return it
-        if dists[nearest_idx] < tol:
-            return node_near
-        
-        # Try to extend from nearest node to goal
-        qs = self.calc_intermediate_qs_wo_collision(node_near.value, goal)
-        if not qs:
-            return None
-        
-        curr_parent = node_near
-        for q_next in qs:
-            neighbors = self.rrbt_tree.get_nearest_neighbors(q_next, k=10)
-            new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
-            
-            if new_node is None:
-                break  # Uncertainty too high
-            
-            curr_parent = new_node
-            
-            # Check if we reached the goal
-            if self.problem.cspace.distance(curr_parent.value, goal) < tol:
-                return curr_parent
-        
-        return None
+        # Belief Check: Is the trace of covariance small enough?
+        if node.cost > self.MAX_UNCERTAINTY:
+            return False
 
-    def print_stats(self):
-        total = (
-            self.accepted_nodes + self.rejected_collision + self.rejected_uncertainty
-        )
-        if total == 0:
-            total = 1
-        print(
-            f"Stats: Accepted: {self.accepted_nodes} | "
-            f"Rej(Collision): {self.rejected_collision} | "
-            f"Rej(Uncertainty): {self.rejected_uncertainty} ({self.rejected_uncertainty / total:.1%})"
-        )
+        # If we are here, we have gathered enough information.
+        return True
+
+    def sample_final_goal(self, node):
+        """
+        Simulate the 'Commitment' step.
+        Now that uncertainty is low, we sample a specific goal configuration
+        from the belief distribution.
+        """
+        # Mean = The True Goal (Simulation of the estimator converging)
+        # Covariance = The Node's Belief (sigma)
+
+        true_goal = np.array(self.problem.goal)
+        belief_sigma = node.sigma
+
+        # Sample from N(TrueGoal, Sigma)
+        pred_q_goal = np.random.multivariate_normal(true_goal, belief_sigma)
+
+        return pred_q_goal

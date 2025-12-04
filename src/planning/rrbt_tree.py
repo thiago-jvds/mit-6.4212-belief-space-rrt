@@ -11,25 +11,19 @@ class BeliefNode(TreeNode):
         self.sigma = sigma  # Covariance Matrix (7x7)
         self.cost = cost  # Trace(Sigma) or cumulative objective
 
-class RRBT_Tree:
-    """
-    The 'Graph' described in the Paper.
-    Handles Propagate, Insert, Rewire, and the Priority Queue.
-    """
 
-    def __init__(self, problem, root_value, max_uncertainty):
+class RRBT_Tree:
+    def __init__(self, problem, root_value, max_uncertainty, initial_uncertainty=1.0):
         self.problem = problem
         self.cspace = problem.cspace
-        self.MAX_UNCERTAINTY = max_uncertainty
 
-        # Initialize Root
-        self.root = BeliefNode(
-            root_value, 
-            parent=None, 
-            sigma=np.eye(7) * 1e-6, 
-            cost=np.trace(np.eye(7) * 1e-6)
-        )
-        self.nodes = [self.root]  # Keep track of all nodes for 'Nearest'
+        # We store the goal threshold, but don't prune intermediate nodes
+        self.GOAL_THRESHOLD = max_uncertainty
+
+        # Initialize Root with HIGH Uncertainty
+        init_sigma = np.eye(7) * initial_uncertainty
+        self.root = BeliefNode(root_value, None, init_sigma, np.trace(init_sigma))
+        self.nodes = [self.root]
 
     def get_nearest_neighbors(self, config, k=10):
         """Finds k-nearest neighbors (Simple Euclidean for now)"""
@@ -37,7 +31,7 @@ class RRBT_Tree:
         # Get indices of k smallest distances
         indices = np.argsort(dists)[:k]
         return [self.nodes[i] for i in indices]
-    
+
     def _is_ancestor(self, possible_ancestor, node):
         """
         Returns True if 'possible_ancestor' is found by walking up
@@ -51,12 +45,16 @@ class RRBT_Tree:
         return False
 
     def Propagate(self, parent_node, q_target):
-        """[Paper V.A]: Belief Propagation (Physics)"""
         sigma_parent = parent_node.sigma
-        A, Q, C, R = self.problem.get_dynamics_and_observation(q_target)
 
-        # KF Prediction & Update
-        sigma_pred = A @ sigma_parent @ A.T + Q
+        # Get Dynamics (Q is None)
+        A, _, C, R = self.problem.get_dynamics_and_observation(q_target)
+
+        # 1. Prediction (Static Target: Sigma stays constant)
+        # sigma_pred = A @ sigma_parent @ A.T + Q (where Q=0, A=I)
+        sigma_pred = sigma_parent
+
+        # 2. Update (Measurement reduces Sigma)
         S = C @ sigma_pred @ C.T + R
         try:
             K_T = np.linalg.solve(S, (sigma_pred @ C.T).T)
@@ -67,14 +65,12 @@ class RRBT_Tree:
         sigma_new = (np.eye(7) - K @ C) @ sigma_pred
         cost_new = np.trace(sigma_new)
 
-        if cost_new > self.MAX_UNCERTAINTY:
-            return None
-
+        # CHANGE: No pruning here. Return belief even if cost is high.
         return {"sigma": sigma_new, "cost": cost_new}
 
     def InsertNode(self, q_new, neighbors, nearest_node):
         """[Paper Algo 1]: ChooseParent + Insert + Rewire"""
-        
+
         # 1. CHOOSE PARENT
         # Use nearest_node as the parent to maintain tree structure.
         # (Previously tried ALL neighbors, but this caused everything to connect
@@ -82,7 +78,7 @@ class RRBT_Tree:
         belief = self.Propagate(nearest_node, q_new)
         if belief is None:
             return None  # Can't connect to intended parent
-        
+
         best_parent = nearest_node
         best_belief = belief
 
@@ -99,7 +95,7 @@ class RRBT_Tree:
             if node == best_parent:
                 continue
 
-            if node == new_node: 
+            if node == new_node:
                 continue
 
             # We are considering making 'new_node' the parent of 'node'.
@@ -108,7 +104,7 @@ class RRBT_Tree:
             # of 'node' creates a loop.
             if self._is_ancestor(node, new_node):
                 continue
-            
+
             # # Check if path from new_node to node is collision-free
             # if not self.problem.safe_path(new_node.value, node.value):
             #     continue  # Skip this neighbor node b/c path has collision
@@ -139,11 +135,11 @@ class RRBT_Tree:
 
         iterations = 0
         MAX_OPERATIONS = len(self.nodes) * 2  # Generous upper bound
-        
+
         while queue:
             u = queue.popleft()
             iterations += 1
-            
+
             if iterations > MAX_OPERATIONS:
                 print("🚨 CRITICAL ERROR: Infinite Loop detected in RRBT Rewire!")
                 print("   A cycle likely exists in the tree.")

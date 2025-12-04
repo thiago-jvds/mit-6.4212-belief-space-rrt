@@ -18,7 +18,10 @@ class ManipulationStationSim:
         )
 
         self.to_point_cloud = AddPointClouds(
-            scenario=scenario, station=self.station, builder=builder, meshcat=meshcat   # type: ignore
+            scenario=scenario,
+            station=self.station,
+            builder=builder,
+            meshcat=meshcat,  # type: ignore
         )
         self.plant = self.station.GetSubsystemByName("plant")  # type: ignore
         self.scene_graph = self.station.GetSubsystemByName("scene_graph")  # type: ignore
@@ -94,6 +97,7 @@ class ManipulationStationSim:
 
         return len(collision_pairs) > 0
 
+
 class IiwaProblem(Problem):
     def __init__(
         self,
@@ -160,88 +164,59 @@ class IiwaProblem(Problem):
                     self.gripper_setpoint,
                 )
 
+
 class IiwaProblemBelief(IiwaProblem):
-    """
-    A wrapper that adds Belief Space Dynamics to the existing IiwaProblem.
-    """
-    def __init__(self, 
-                 q_start, q_goal, gripper_setpoint, meshcat, 
-                 light_center, light_size, Q_uncertainty, R_light_uncertainty, R_dark_uncertainty) -> None:
-        
-        # 1. Call Parent Init
-        super().__init__(q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True)
-        
+    def __init__(
+        self,
+        q_start,
+        q_goal,
+        gripper_setpoint,
+        meshcat,
+        light_center,
+        light_size,
+        scale_R_light,
+        scale_R_dark,
+    ):
+        super().__init__(
+            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
+        )
+
         self.light_center = light_center
         self.light_half = light_size / 2.0
-        
-        # --- PHYSICS PARAMETERS ---
+
+        # --- PHYSICS CHANGES FOR ACTIVE PERCEPTION ---
+        # 1. State Transition (A=I)
+        # The target stays where it is.
         self.A = np.eye(7)
+
+        # 2. Observation Matrix (C=I)
+        # If we see it, we see the full state (simplified).
         self.C = np.eye(7)
-        self.Q = np.eye(7) * Q_uncertainty
-        self.R_light = np.eye(7) * R_light_uncertainty
-        self.R_dark = np.eye(7) * R_dark_uncertainty
 
-        # --- SAFETY BUFFER SETUP ---
-        plant = self.collision_checker.plant
-        context = self.collision_checker.context_plant
-        
-        mustard_body = plant.GetBodyByName("base_link_mustard")
-        
-        # Create the attribute NOW
-        self.mustard_pos = plant.EvalBodyPoseInWorld(context, mustard_body).translation()
-        
-        # Safety radius around the mustard bottle
-        self.safety_radius = 0.08
+        # 3. Process Noise (Q=None)
+        # REMOVED self.Q because the target is static.
 
-    def collide(self, q: np.ndarray) -> bool:
-        """
-        Custom collision check with initialization safety.
-        """
-        # 1. Standard Geometric Collision (Always check this)
-        if super().collide(q):
-            return True
-        
-        if not hasattr(self, 'mustard_pos'):
-            return False
+        # 4. Sensor Noise
 
-        plant = self.collision_checker.plant
-        context = self.collision_checker.context_plant
-        iiwa = plant.GetModelInstanceByName("iiwa")
-        
-        # Update plant positions
-        plant.SetPositions(context, iiwa, np.array(q))
-        
-        # Get Gripper Position
-        wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
-        gripper_pos = plant.EvalBodyPoseInWorld(context, wsg_body).translation()
-        
-        # Check Distance
-        dist = np.linalg.norm(gripper_pos - self.mustard_pos)
-        
-        # Goal Exception
-        is_goal = np.linalg.norm(np.array(q) - np.array(self.goal)) < 0.01
-        
-        if dist < self.safety_radius and not is_goal:
-            return True 
-            
-        return False 
+        self.mustard_pos = q_goal
+
+        self.R_light = np.eye(7) * scale_R_light
+        self.R_dark = np.eye(7) * scale_R_dark
 
     def is_in_light(self, q: tuple) -> bool:
+        # (Same as previous)
         plant = self.collision_checker.plant
         context = self.collision_checker.context_plant
-        iiwa_model = plant.GetModelInstanceByName("iiwa")
-        
-        plant.SetPositions(context, iiwa_model, np.array(q))
-        
-        gripper_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
-        X_Gripper = plant.EvalBodyPoseInWorld(context, gripper_body)
-        
-        delta = np.abs(X_Gripper.translation() - self.light_center)
+        plant.SetPositions(context, plant.GetModelInstanceByName("iiwa"), np.array(q))
+        camera_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
+        X_Cam = plant.EvalBodyPoseInWorld(context, camera_body)
+        delta = np.abs(X_Cam.translation() - self.light_center)
         return np.all(delta <= self.light_half)
 
     def get_dynamics_and_observation(self, q: tuple):
+        """Returns A, Q(None), C, R based on robot location q"""
         if self.is_in_light(q):
             R = self.R_light
         else:
             R = self.R_dark
-        return self.A, self.Q, self.C, R
+        return self.A, None, self.C, R

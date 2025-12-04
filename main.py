@@ -29,37 +29,45 @@ from pydrake.all import (
 )
 import argparse
 from src.perception.light_and_dark import LightDarkRegionSystem
-from src.simulation.sim_setup import IiwaProblemBelief
+from src.simulation.simulation_tools import IiwaProblemBelief, IiwaProblem
 from src.planning.standard_rrt import rrt_planning
 from src.planning.belief_space_rrt import rrbt_planning
-from src.simulation.sim_setup import visualize_noisy_execution, visualize_belief_path, visualize_belief_tree
+from src.simulation.sim_setup import (
+    visualize_noisy_execution,
+    visualize_belief_path,
+    visualize_belief_tree,
+    visualize_target_uncertainty
+)
 from src.utils.config_loader import load_rrbt_config
 
 
 def debug_path_beliefs(problem, path):
     """Print uncertainty at each waypoint."""
     sigma = np.eye(7) * 1e-6
-    
-    print("\n" + "="*60)
+
+    print("\n" + "=" * 60)
     print("PATH BELIEF ANALYSIS")
-    print("="*60)
+    print("=" * 60)
     print(f"{'Step':>4} | {'Light?':>6} | {'Trace(Σ)':>12} | {'Status':>10}")
-    print("-"*60)
-    
+    print("-" * 60)
+
     for i, q in enumerate(path):
         A, Q, C, R = problem.get_dynamics_and_observation(q)
         sigma_pred = A @ sigma @ A.T + Q
         S = C @ sigma_pred @ C.T + R
         K = sigma_pred @ C.T @ np.linalg.inv(S)
         sigma = (np.eye(7) - K @ C) @ sigma_pred
-        
+
         uncertainty = np.trace(sigma)
         in_light = problem.is_in_light(q)
         status = "✓ OK" if uncertainty < 0.01 else "⚠️ HIGH"
-        
-        print(f"{i:>4} | {'LIGHT' if in_light else 'DARK':>6} | {uncertainty:>12.6f} | {status:>10}")
-    
-    print("="*60)
+
+        print(
+            f"{i:>4} | {'LIGHT' if in_light else 'DARK':>6} | {uncertainty:>12.6f} | {status:>10}"
+        )
+
+    print("=" * 60)
+
 
 def main():
     parser = argparse.ArgumentParser(description="MIT 6.4212 Robot Simulation")
@@ -88,7 +96,9 @@ def main():
     config = load_rrbt_config()
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
-    print(f"    > Planner: MaxUncert={config.planner.max_uncertainty}, LightBias={config.planner.prob_sample_light}")
+    print(
+        f"    > Planner: MaxUncert={config.planner.max_uncertainty}, LightBias={config.planner.prob_sample_light}"
+    )
     print()
 
     try:
@@ -154,7 +164,8 @@ def main():
             Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
         )
         meshcat.SetTransform(
-            "light_region_indicator", RigidTransform(RotationMatrix(), config.simulation.light_center)
+            "light_region_indicator",
+            RigidTransform(RotationMatrix(), config.simulation.light_center),
         )
 
     simulator.AdvanceTo(0.1)
@@ -188,9 +199,8 @@ def main():
         meshcat=meshcat,
         light_center=config.simulation.light_center,
         light_size=config.simulation.light_size,
-        Q_uncertainty=float(config.physics.process_noise_scale),
-        R_light_uncertainty=float(config.physics.meas_noise_light),
-        R_dark_uncertainty=float(config.physics.meas_noise_dark),
+        scale_R_light=float(config.physics.meas_noise_light),
+        scale_R_dark=float(config.physics.meas_noise_dark),
     )
 
     path = None
@@ -203,34 +213,58 @@ def main():
         )
     elif args.planner == "rrbt":
         print("Running RRBT...")
-        
+
         # Create visualization callback for debugging the belief tree
         def tree_viz_callback(rrbt_tree, iteration):
             visualize_belief_tree(rrbt_tree, problem, meshcat, iteration)
-        
-        path, k = rrbt_planning(
+
+        rrbt_result, k = rrbt_planning(
             problem,
-            max_iterations=config.planner.max_iterations,
-            max_uncertainty=float(config.planner.max_uncertainty),
+            max_iterations=int(config.planner.max_iterations),
             prob_sample_q_goal=float(config.planner.prob_sample_goal),
             prob_sample_q_light=float(config.planner.prob_sample_light),
-            q_light_hint=config.planner.q_light_hint,
-            visualize_callback=tree_viz_callback,
-            visualize_interval=1,  # Visualize every iteration
+            max_uncertainty=float(config.planner.max_uncertainty),
+            q_light_hint=np.array(config.planner.q_light_hint),
+            visualize_callback=None, # Set to tree_viz_callback to see tree grow
+            visualize_interval=1000
         )
 
-    # 4. Visualize Noisy Execution if path found
-    if path:
-        print(f"✓ Path found ({k+1} iters). Replaying with NOISE...")
-        
-        # Debug the belief path
-        debug_path_beliefs(problem, path)
-        
-        # # Visualize the belief path before noisy execution
-        # visualize_belief_path(problem, path, meshcat)
+        if rrbt_result:
+            print("✓ RRBT Converged. Planning Grasp...")
+            path_to_info, pred_q_goal = rrbt_result
+            
+            # CALL 2: Standard RRT to Reach the Estimated Goal
+            # We update the problem start/goal
+            problemRRT = IiwaProblem(
+                q_start=path_to_info[-1],
+                q_goal=pred_q_goal,
+                gripper_setpoint=0.1,
+                meshcat=meshcat,
+            )
+            
+            path_to_grasp, _ = rrt_planning(
+                problemRRT, 
+                max_iterations=1000,
+                prob_sample_q_goal=0.15, # High bias for short grasp
+            )
+            
+            if path_to_grasp:
+                final_path = path_to_info + path_to_grasp
+            else:
+                print("✗ Grasp planning failed (RRT could not connect info state to goal).")
+                final_path = path_to_info # At least visualize the info gathering
+        else:
+            print("✗ RRBT Failed to find information path.")
 
-        # visualize_noisy_execution(problem, path, meshcat)
-        print(f"\n✓ Path found in ({k+1} iters).")
+    # --- 7. VISUALIZATION ---
+    if final_path:
+        print("✓ Sequence Complete. Visualizing...")
+        
+        visualize_target_uncertainty(
+            problem, 
+            final_path, 
+            meshcat, 
+        )
     else:
         print("✗ No path found.")
 

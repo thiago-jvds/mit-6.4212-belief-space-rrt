@@ -1,29 +1,34 @@
 simulation:
-  light_center: [ 0.0, 2.0, 0.5 ]
+  light_center: [ -0.5, 0.5, 0.5 ]
   light_size: [ 1.0, 0.25, 1.0 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   q_goal: [ 0.0, 0.709, 0.0, -1.601, 0.0, -0.739, 0.0 ]
 
 physics:
-  # Process Noise (Q): How much the robot drifts per step
-  # Multiplier for np.eye(7)
-  process_noise_scale: 1e-4
+  # Process Noise is ZERO. 
+  # The target does not move/drift. The robot moves perfectly.
+  process_noise_scale: 0.0
 
-  # Measurement Noise (R): How noisy the sensor is
-  # Multiplier for np.eye(7)
-  meas_noise_light: 1e-4 # Very accurate in light
-  meas_noise_dark: 100.0 # Very blind in dark
+  # Sensor Noise:
+  # Light: High precision (info gain). Dark: Blind.
+  meas_noise_light: 1e-2
+  meas_noise_dark: 1e+9
+
+  # Keep buffer to avoid hitting the bottle while exploring
+  safety_buffer_radius: 0.08
 
 planner:
-  # RRT/RRBT Parameters
   max_iterations: 5000
-  prob_sample_goal: 0.25
 
-  # Max allowed uncertainty trace before pruning
-  max_uncertainty: 1.0
+  # INITIAL BELIEF: We start knowing very little about the target.
+  # Trace(Sigma) = 7.0 (High uncertainty)
+  initial_target_uncertainty: 1.0
 
-  # Sampling Biases
-  prob_sample_light: 0.0 # High bias to force detour
+  # GOAL CONDITION: We cannot finish unless we are confident.
+  # Threshold to attempt the grasp.
+  max_uncertainty: 0.01
 
-  # Heuristic Hint 
+  # Biases
+  prob_sample_goal: 0.0
+  prob_sample_light: 0.05
   q_light_hint: [ 0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028 ]

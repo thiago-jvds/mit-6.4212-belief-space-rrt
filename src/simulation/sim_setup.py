@@ -1,6 +1,7 @@
 import numpy as np
 from src.simulation.simulation_tools import IiwaProblemBelief
 from typing import List
+from pydrake.all import Sphere, Rgba, RigidTransform, RotationMatrix
 
 
 def simulate_execution(problem: IiwaProblemBelief, path: List[List[float]], trials=20):
@@ -51,6 +52,68 @@ def simulate_execution(problem: IiwaProblemBelief, path: List[List[float]], tria
 
     return (success_count / trials) * 100.0
 
+def visualize_belief_path(problem, path, meshcat, belief_nodes=None):
+    """
+    Visualizes the planned path with uncertainty indicators.
+    
+    Args:
+        problem: IiwaProblemBelief instance
+        path: List of configurations [q_start, ..., q_goal]
+        meshcat: Meshcat instance
+        belief_nodes: Optional list of BeliefNodes (if available)
+    """
+    plant = problem.collision_checker.plant
+    context = problem.collision_checker.context_plant
+    iiwa = plant.GetModelInstanceByName("iiwa")
+    wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
+    
+    # Simulate belief propagation if nodes not provided
+    sigma = np.eye(7) * 1e-6
+    
+    for i, q in enumerate(path):
+        # Get gripper position via forward kinematics
+        plant.SetPositions(context, iiwa, np.array(q))
+        X_Gripper = plant.EvalBodyPoseInWorld(context, wsg_body)
+        gripper_pos = X_Gripper.translation()
+        
+        # Propagate belief to get uncertainty at this waypoint
+        A, Q, C, R = problem.get_dynamics_and_observation(q)
+        sigma_pred = A @ sigma @ A.T + Q
+        S = C @ sigma_pred @ C.T + R
+        K = sigma_pred @ C.T @ np.linalg.inv(S)
+        sigma = (np.eye(7) - K @ C) @ sigma_pred
+        uncertainty = np.trace(sigma)
+        
+        # Check if in light or dark
+        in_light = problem.is_in_light(q)
+        
+        # Color: Green if in light, Red if in dark
+        color = Rgba(0, 1, 0, 0.5) if in_light else Rgba(1, 0, 0, 0.5)
+        
+        # Sphere radius proportional to uncertainty (scaled for visibility)
+        radius = max(0.01, min(0.1, uncertainty * 10))  # Clamp between 1cm and 10cm
+        
+        # Draw sphere at gripper position
+        sphere_name = f"path_uncertainty_{i}"
+        meshcat.SetObject(sphere_name, Sphere(radius), color)
+        meshcat.SetTransform(sphere_name, RigidTransform(RotationMatrix(), gripper_pos))
+        
+        # Draw path line segment
+        if i > 0:
+            prev_q = path[i-1]
+            plant.SetPositions(context, iiwa, np.array(prev_q))
+            prev_pos = plant.EvalBodyPoseInWorld(context, wsg_body).translation()
+            
+            # Draw line segment (as thin cylinder or use SetLine)
+            line_name = f"path_line_{i}"
+            meshcat.SetLine(line_name, np.column_stack([prev_pos, gripper_pos]), 
+                           rgba=Rgba(1, 1, 0, 1))  # Yellow path
+    
+    # Print path statistics
+    print(f"\n📊 Path Statistics:")
+    print(f"   Total waypoints: {len(path)}")
+    print(f"   Final uncertainty: {uncertainty:.6f}")
+    print(f"   Max uncertainty threshold: {problem.collision_checker.MAX_UNCERTAINTY if hasattr(problem.collision_checker, 'MAX_UNCERTAINTY') else 'N/A'}")
 
 def visualize_noisy_execution(problem, path, meshcat):
     """

@@ -133,8 +133,7 @@ class IiwaProblem(Problem):
         cspace_iiwa = ConfigurationSpace(range_list, l2_distance, max_steps)  # type: ignore
 
         # Call base class constructor.
-        Problem.__init__(
-            self,
+        super().__init__(
             x=10,  # not used.
             y=10,  # not used.
             robot=None,  # not used.

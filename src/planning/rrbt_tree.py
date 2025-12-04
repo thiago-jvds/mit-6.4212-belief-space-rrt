@@ -70,25 +70,37 @@ class RRBT_Tree:
     def InsertNode(self, q_new, neighbors, nearest_node):
         """[Paper Algo 1]: ChooseParent + Insert + Rewire"""
 
-        # 1. CHOOSE BEST PARENT (from neighbors)
-        best_parent = nearest_node
-        best_belief = self.Propagate(nearest_node, q_new)
+        # 1. CHOOSE BEST PARENT (from ALL neighbors, not just nearest)
+        best_parent = None
+        best_belief = None
 
-        if best_belief is None:
-            return None  # Even nearest failed
+        # Try nearest_node first
+        belief = self.Propagate(nearest_node, q_new)
+        if belief is not None:
+            best_belief = belief
+            best_parent = nearest_node
 
-        # Try to find a better parent in the neighborhood
+        # Try ALL neighbors to find a valid parent with lowest cost
         for node in neighbors:
             if node == nearest_node:
                 continue
-
+            
             # Geometric check (Simplified: assumes localized connection is safe)
             # In full implementation, check collision(node -> q_new) here
-
+            
+            # # Check if path from node to q_new is collision-free
+            # if not self.problem.safe_path(node.value, q_new):
+            #     continue  # Skip this neighbor node b/c path has collision
+            
             belief = self.Propagate(node, q_new)
-            if belief and belief["cost"] < best_belief["cost"]:
-                best_belief = belief
-                best_parent = node
+            if belief is not None:
+                if best_belief is None or belief["cost"] < best_belief["cost"]:
+                    best_belief = belief
+                    best_parent = node
+
+        # Only fail if NO neighbor can serve as parent
+        if best_belief is None:
+            return None
 
         # 2. CREATE NODE
         new_node = BeliefNode(
@@ -112,6 +124,10 @@ class RRBT_Tree:
             # of 'node' creates a loop.
             if self._is_ancestor(node, new_node):
                 continue
+            
+            # # Check if path from new_node to node is collision-free
+            # if not self.problem.safe_path(new_node.value, node.value):
+            #     continue  # Skip this neighbor node b/c path has collision
 
             # Try connecting new_node -> neighbor
             belief_rewire = self.Propagate(new_node, node.value)

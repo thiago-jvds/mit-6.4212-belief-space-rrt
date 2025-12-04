@@ -34,6 +34,7 @@ def rrbt_planning(
 
         # 1. Sample
         eps = random.random()
+        # Bias sampling towards goal, light region, or random
         if eps < prob_sample_q_goal:
             q_rand = problem.goal
         elif eps < (prob_sample_q_goal + prob_sample_q_light):

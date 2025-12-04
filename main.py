@@ -32,9 +32,34 @@ from src.perception.light_and_dark import LightDarkRegionSystem
 from src.simulation.sim_setup import IiwaProblemBelief
 from src.planning.standard_rrt import rrt_planning
 from src.planning.belief_space_rrt import rrbt_planning
-from src.simulation.sim_setup import visualize_noisy_execution
+from src.simulation.sim_setup import visualize_noisy_execution, visualize_belief_path
 from src.utils.config_loader import load_rrbt_config
 
+
+def debug_path_beliefs(problem, path):
+    """Print uncertainty at each waypoint."""
+    sigma = np.eye(7) * 1e-6
+    
+    print("\n" + "="*60)
+    print("PATH BELIEF ANALYSIS")
+    print("="*60)
+    print(f"{'Step':>4} | {'Light?':>6} | {'Trace(Σ)':>12} | {'Status':>10}")
+    print("-"*60)
+    
+    for i, q in enumerate(path):
+        A, Q, C, R = problem.get_dynamics_and_observation(q)
+        sigma_pred = A @ sigma @ A.T + Q
+        S = C @ sigma_pred @ C.T + R
+        K = sigma_pred @ C.T @ np.linalg.inv(S)
+        sigma = (np.eye(7) - K @ C) @ sigma_pred
+        
+        uncertainty = np.trace(sigma)
+        in_light = problem.is_in_light(q)
+        status = "✓ OK" if uncertainty < 0.01 else "⚠️ HIGH"
+        
+        print(f"{i:>4} | {'LIGHT' if in_light else 'DARK':>6} | {uncertainty:>12.6f} | {status:>10}")
+    
+    print("="*60)
 
 def main():
     parser = argparse.ArgumentParser(description="MIT 6.4212 Robot Simulation")
@@ -190,7 +215,14 @@ def main():
     # 4. Visualize Noisy Execution if path found
     if path:
         print(f"✓ Path found ({k} iters). Replaying with NOISE...")
-        visualize_noisy_execution(problem, path, meshcat)
+        
+        # Debug the belief path
+        debug_path_beliefs(problem, path)
+        
+        # Visualize the belief path before noisy execution
+        visualize_belief_path(problem, path, meshcat)
+    
+        # visualize_noisy_execution(problem, path, meshcat)
     else:
         print("✗ No path found.")
 

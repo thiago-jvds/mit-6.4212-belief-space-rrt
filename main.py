@@ -214,15 +214,16 @@ def main():
 
     # 4. Visualize Noisy Execution if path found
     if path:
-        print(f"✓ Path found ({k} iters). Replaying with NOISE...")
+        print(f"✓ Path found ({k+1} iters). Replaying with NOISE...")
         
         # Debug the belief path
         debug_path_beliefs(problem, path)
         
         # Visualize the belief path before noisy execution
         visualize_belief_path(problem, path, meshcat)
-    
+
         # visualize_noisy_execution(problem, path, meshcat)
+        print(f"\n\t✓ Path found in ({k+1} iters).")
     else:
         print("✗ No path found.")
 

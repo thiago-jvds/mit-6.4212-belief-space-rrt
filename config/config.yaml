@@ -1,6 +1,6 @@
 simulation:
-  light_center: [ 0.0, 0.5, 0.5 ]
-  light_size: [ 1.0, 0.25, 1.0 ]
+  light_center: [ 0.0, 0.0, 0.0 ]
+  light_size: [ 10.0, 10.0, 10.0 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   q_goal: [ 0.0, 0.709, 0.0, -1.601, 0.0, -0.739, 0.0 ]
 
@@ -17,13 +17,13 @@ physics:
 planner:
   # RRT/RRBT Parameters
   max_iterations: 5000
-  prob_sample_goal: 0.2
+  prob_sample_goal: 0.25
 
   # Max allowed uncertainty trace before pruning
   max_uncertainty: 0.01
 
   # Sampling Biases
-  prob_sample_light: 0.4 # High bias to force detour
+  prob_sample_light: 0.0 # High bias to force detour
 
   # Heuristic Hint 
   q_light_hint: [ 0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028 ]

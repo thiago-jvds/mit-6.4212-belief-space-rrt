@@ -83,6 +83,7 @@ class RRBT_tools(RRT_tools):
         # 2. Interpolate (Geometric path)
         qs = self.calc_intermediate_qs_wo_collision(node_near.value, q_rand)
         if not qs:
+            print("Extend: no progress possible (collision)")
             return node_near
 
         curr_parent = node_near
@@ -96,6 +97,7 @@ class RRBT_tools(RRT_tools):
             new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
 
             if new_node is None:
+                print("Extend: InsertNode failed (uncertainty too high)")
                 break  # Propagation failed
 
             curr_parent = new_node

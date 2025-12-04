@@ -48,6 +48,11 @@ def rrbt_planning(
         # 3. Goal Check
         if tools.node_reaches_goal(last_node, tol=0.15):
             return tools.backup_path(last_node), k
+        
+        # # Also check if ANY node in the tree reached the goal (more robust)
+        # for node in tools.rrbt_tree.nodes:
+        #     if tools.node_reaches_goal(node, tol=0.15):
+        #         return tools.backup_path(node), k
 
     tools.print_stats()
     return None, max_iterations

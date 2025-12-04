@@ -23,7 +23,12 @@ class RRBT_Tree:
         self.MAX_UNCERTAINTY = max_uncertainty
 
         # Initialize Root
-        self.root = BeliefNode(root_value, parent=None, sigma=np.eye(7) * 1e-6, cost=0.0)
+        self.root = BeliefNode(
+            root_value, 
+            parent=None, 
+            sigma=np.eye(7) * 1e-6, 
+            cost=np.trace(np.eye(7) * 1e-6)
+        )
         self.nodes = [self.root]  # Keep track of all nodes for 'Nearest'
 
     def get_nearest_neighbors(self, config, k=10):
@@ -69,7 +74,7 @@ class RRBT_Tree:
 
     def InsertNode(self, q_new, neighbors, nearest_node):
         """[Paper Algo 1]: ChooseParent + Insert + Rewire"""
-
+        
         # 1. CHOOSE BEST PARENT (from ALL neighbors, not just nearest)
         best_parent = None
         best_belief = None

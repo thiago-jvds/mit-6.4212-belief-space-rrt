@@ -75,8 +75,8 @@ def main():
         "--visualize",
         type=str,
         nargs="?",
-        const=True,
-        default=True,
+        const="True",
+        default="True",
         help="Enable/Disable Meshcat visualization (True/False)",
     )
     parser.add_argument(
@@ -203,7 +203,7 @@ def main():
         scale_R_dark=float(config.physics.meas_noise_dark),
     )
 
-    path = None
+    final_path = None
     if args.planner == "rrt":
         print("Running Standard RRT...")
         path, k = rrt_planning(
@@ -211,6 +211,8 @@ def main():
             max_iterations=config.planner.max_iterations,
             prob_sample_q_goal=float(config.planner.prob_sample_goal),
         )
+        if path:
+            final_path = path
     elif args.planner == "rrbt":
         print("Running RRBT...")
 
@@ -255,6 +257,7 @@ def main():
                 final_path = path_to_info # At least visualize the info gathering
         else:
             print("✗ RRBT Failed to find information path.")
+            final_path = None
 
     # --- 7. VISUALIZATION ---
     if final_path:

@@ -1,7 +1,15 @@
 import numpy as np
 from src.simulation.simulation_tools import IiwaProblemBelief
 from typing import List
-from pydrake.all import Sphere, Rgba, RigidTransform, RotationMatrix, Ellipsoid
+from pydrake.all import (
+    Sphere,
+    Rgba,
+    RigidTransform,
+    RotationMatrix,
+    Ellipsoid,
+    JacobianWrtVariable,
+    Meshcat,
+)
 
 
 def simulate_execution(problem: IiwaProblemBelief, path: List[List[float]], trials=20):
@@ -200,120 +208,186 @@ def visualize_noisy_execution(problem, path, meshcat):
     print(f"  Final Position Error: {dist_error * 100:.2f} cm")
 
 
-def visualize_target_uncertainty(problem, path, meshcat, true_goal_config=None):
+def visualize_target_uncertainty(problem, path, meshcat: Meshcat, initial_sigma=None):
     """
-    Visualizes the robot path and the SHRINKING UNCERTAINTY
-    around the estimated q_goal.
+    Visualizes the robot following `path` while showing an uncertainty ellipsoid
+    at the FIXED goal location. The ellipsoid shrinks as the robot gains 
+    information (enters the light region).
+    
+    The ellipsoid size is animated via scale transforms (not SetObject) so that
+    the animation is properly recorded and playable in Meshcat's timeline.
+    
+    Args:
+        problem: IiwaProblemBelief instance
+        path: List of joint configurations [q_start, ..., q_goal]
+        meshcat: Meshcat instance
+        initial_sigma: Initial 7x7 covariance matrix (defaults to 1.0 * I)
     """
     print("\n   > Visualizing Goal Uncertainty Evolution...")
-    meshcat.DeleteRecording()
-    meshcat.StartRecording()
 
     sim_wrapper = problem.collision_checker
     plant = sim_wrapper.plant
 
-    # Context for Visualization (Robot Motion)
-    viz_context = sim_wrapper.context_plant
-
-    # --- FIX: Create a Separate Context for Math (Goal FK) ---
-    # We use this to calculate X_Est without moving the actual robot visual
+    # Separate context for math (Jacobian computation) to not disturb visualization
     math_context = plant.CreateDefaultContext()
 
     iiwa_model = plant.GetModelInstanceByName("iiwa")
     wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
+    wsg_frame = plant.GetFrameByName("body", plant.GetModelInstanceByName("wsg"))
+    world_frame = plant.world_frame()
 
     # ---------------------------------------------------------
-    # 1. CALCULATE TRUTH (The Mean we are uncertain about)
+    # 1. COMPUTE GOAL POSITION AND JACOBIAN (Fixed throughout)
     # ---------------------------------------------------------
-    if true_goal_config is not None:
-        true_q_goal = np.array(true_goal_config) # Use explicit truth
+    q_goal = np.array(problem.goal)
+    plant.SetPositions(math_context, iiwa_model, q_goal)
+    X_Goal = plant.EvalBodyPoseInWorld(math_context, wsg_body)
+    goal_position = X_Goal.translation()
+
+    # Compute Jacobian at goal configuration: maps joint velocities to gripper velocity
+    # J is 3x7 for translational velocity
+    # p_BoBi_B must be a 2D array: [3, n] where n is number of points
+    p_BoBi_B = np.array([[0.0], [0.0], [0.0]])  # Point at origin of gripper frame
+    J_goal = plant.CalcJacobianTranslationalVelocity(
+        math_context,
+        with_respect_to=JacobianWrtVariable.kQDot,
+        frame_B=wsg_frame,
+        p_BoBi_B=p_BoBi_B,
+        frame_A=world_frame,
+        frame_E=world_frame,
+    )
+    # Extract only the iiwa columns (first 7 of potentially more columns)
+    # J_goal shape is [3, nq] where nq is number of generalized velocities
+    J_goal = J_goal[:, :7]
+
+    # ---------------------------------------------------------
+    # 2. INITIALIZE BELIEF STATE
+    # ---------------------------------------------------------
+    if initial_sigma is None:
+        sigma = np.eye(7) * 1.0  # High initial uncertainty
     else:
-        true_q_goal = np.array(problem.goal)     # Fallback
-
-    # Calculate True 3D Position using the MATH context
-    plant.SetPositions(math_context, iiwa_model, true_q_goal)
-    X_TrueGoal = plant.EvalBodyPoseInWorld(math_context, wsg_body)
+        sigma = initial_sigma.copy()
 
     # ---------------------------------------------------------
-    # 2. INITIALIZE BELIEF
+    # 4. START RECORDING (after objects are created)
     # ---------------------------------------------------------
-    est_q_goal = true_q_goal + np.random.uniform(-0.5, 0.5, size=7)
-    est_sigma = np.eye(7) * 1.0
+    meshcat.DeleteRecording()
+    meshcat.StartRecording()
+    
+    # Initial time for the recording
+    t0 = 0.0
+    
+    # ---------------------------------------------------------
+    # 3. SETUP VISUALIZATION OBJECTS
+    # ---------------------------------------------------------
+    # Goal marker (small green sphere at true goal)
+    meshcat.SetObject("goal_uncertainty/goal_marker", Sphere(0.02), Rgba(0, 1, 0, 0.8))
+    meshcat.SetTransform("goal_uncertainty/goal_marker", X_Goal)
 
-    # Setup Meshcat Objects
-    meshcat.SetObject("uncertainty/ellipsoid", Sphere(1.0), Rgba(1, 0.2, 0, 0.3))
-    meshcat.SetObject("uncertainty/estimate", Sphere(0.03), Rgba(0, 0, 1, 1.0))
-    meshcat.SetObject("uncertainty/truth", Sphere(0.03), Rgba(0, 1, 0, 0.5))
+    # Create a UNIT SPHERE that we'll scale via transform matrix
+    # IMPORTANT: Create BEFORE StartRecording so Meshcat knows to track this object
+    meshcat.SetObject("goal_uncertainty/ellipsoid", Sphere(1.0), Rgba(1, 0.3, 0, 0.25))
+    
+    # Set initial transform at goal position with initial large scale
+    initial_radius = 0.5  # Large initial size
+    initial_transform = np.eye(4)
+    initial_transform[:3, :3] = np.eye(3) * initial_radius
+    initial_transform[:3, 3] = goal_position
+    meshcat.SetTransform("goal_uncertainty/ellipsoid", initial_transform)
 
-    meshcat.SetTransform("uncertainty/truth", X_TrueGoal)
-
-    # Simulation Params
+    # ---------------------------------------------------------
+    # 5. ANIMATION LOOP
+    # ---------------------------------------------------------
     dt = 0.05
-    current_time = 0.0
+    current_time = t0
+    steps_per_segment = 10
     vis_interval = 2
-    steps = 10
+    # Scale factor for visibility (3-sigma = 99.7% confidence)
+    confidence_scale = 3.0
 
     for i in range(len(path) - 1):
+        if i % 3 == 0:
+            print(f"\r   Step {i+1}/{len(path)-1}", end="")
         q_curr = np.array(path[i])
         q_next = np.array(path[i + 1])
-        step_vec = (q_next - q_curr) / steps
+        step_vec = (q_next - q_curr) / steps_per_segment
 
-        for s in range(steps):
-            current_time += dt / steps
+        for s in range(steps_per_segment):
+            current_time += dt / steps_per_segment
             sim_wrapper.context_diagram.SetTime(current_time)
 
-            # A. Robot Move
+            # A. Interpolate robot position
             q_robot = q_curr + step_vec * s
 
-            # B. Belief Update (Kalman Filter)
+            # B. Kalman Filter Update (belief propagation)
+            # Get observation noise based on robot's current position
             A, _, C, R = problem.get_dynamics_and_observation(q_robot)
-            sigma_pred = est_sigma
+            
+            # Prediction step (static target, so sigma_pred = sigma)
+            sigma_pred = sigma
+            
+            # Update step
             S = C @ sigma_pred @ C.T + R
             K = sigma_pred @ C.T @ np.linalg.inv(S)
-            est_sigma = (np.eye(7) - K @ C) @ sigma_pred
+            sigma = (np.eye(7) - K @ C) @ sigma_pred
 
-            # C. Simulate Convergence
-            info_gain = np.trace(sigma_pred) - np.trace(est_sigma)
-            if info_gain > 1e-6:
-                alpha = 0.1
-                est_q_goal = est_q_goal * (1 - alpha) + true_q_goal * alpha
-
-            # D. Visualization
+            # C. Visualization (at intervals to reduce overhead)
             if s % vis_interval == 0:
-                # 1. Update Robot Visuals (Uses Main/Viz Context)
-                sim_wrapper.DrawStation(q_robot, 0.1)
+                # Project 7D covariance to 3D task-space covariance at goal
+                # Sigma_3D = J @ Sigma_7D @ J^T
+                sigma_3d = J_goal @ sigma @ J_goal.T
 
-                # 2. Calculate Estimate Position (Uses Math Context)
-                # This does NOT disturb the robot's position in the visualizer
-                plant.SetPositions(math_context, iiwa_model, est_q_goal)
-                X_Est = plant.EvalBodyPoseInWorld(math_context, wsg_body)
+                # Compute ellipsoid dimensions from eigenvalues
+                eigvals, eigvecs = np.linalg.eigh(sigma_3d)
+                
+                # Clamp eigenvalues to avoid numerical issues
+                eigvals = np.maximum(eigvals, 1e-8)
+                radii = confidence_scale * np.sqrt(eigvals)
+                
+                # Clamp radii for visibility
+                radii = np.clip(radii, 0.01, 0.5)
 
-                # 3. Update Transforms
-                meshcat.SetTransform("uncertainty/estimate", X_Est)
-
-                uncertainty_radius = np.trace(est_sigma) * 0.2
-                uncertainty_radius = max(0.05, uncertainty_radius)
-
-                meshcat.SetObject(
-                    "uncertainty/ellipsoid",
-                    Sphere(uncertainty_radius),
-                    Rgba(1, 0.5, 0, 0.3),
-                )
-                meshcat.SetTransform("uncertainty/ellipsoid", X_Est)
-
-                # 4. Publish (This sends the state of Viz Context, which is at q_robot)
+                # Build a 4x4 homogeneous transform that includes:
+                # 1. Rotation to align with principal axes (eigvecs)
+                # 2. Non-uniform scale for ellipsoid shape (radii)
+                # 3. Translation to goal position
+                #
+                # We embed scale into the rotation matrix: RS = R @ diag(radii)
+                # This transforms the unit sphere into an ellipsoid
+                R_ellipsoid = eigvecs  # 3x3 rotation matrix (columns are principal axes)
+                RS_matrix = R_ellipsoid @ np.diag(radii)  # Combined rotation + scale
+                
+                # Create 4x4 homogeneous transform
+                transform_matrix = np.eye(4)
+                transform_matrix[:3, :3] = RS_matrix
+                transform_matrix[:3, 3] = goal_position
+                
+                # CRITICAL: Set transform BEFORE updating robot and publishing
+                # This ensures the manual visualizer update is grouped with the robot update
+                meshcat.SetTransform("goal_uncertainty/ellipsoid", transform_matrix)
+                
+                # Update robot position 
+                sim_wrapper.SetStationConfiguration(q_robot, 0.1)
+                
+                # Publish the frame
+                # This triggers the MeshcatVisualizer to send the robot pose
+                # AND it advances the recording "frame" for the manual SetTransform above
                 sim_wrapper.diagram.ForcedPublish(sim_wrapper.context_diagram)
 
+            # Status update (once per path segment)
             if s == 0:
-                dist_err = np.linalg.norm(est_q_goal - true_q_goal)
+                in_light = problem.is_in_light(q_robot)
+                region = "LIGHT" if in_light else "DARK"
+                trace_sigma = np.trace(sigma)
                 print(
-                    f"\rUncertainty: {np.trace(est_sigma):.4f} | Err: {dist_err:.4f}",
+                    f"\r   Step {i+1}/{len(path)-1} | Region: {region:5} | "
+                    f"Uncertainty (trace): {trace_sigma:.6f}",
                     end="",
                 )
 
     meshcat.StopRecording()
     meshcat.PublishRecording()
-    print("\n✓ Visualization Complete.")
+    print("\n✓ Visualization Complete. Play recording in Meshcat.")
 
 
 def visualize_belief_tree(rrbt_tree, problem, meshcat, iteration):

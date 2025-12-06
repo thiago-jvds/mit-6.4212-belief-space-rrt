@@ -75,16 +75,37 @@ class RRBT_Tree:
     def InsertNode(self, q_new, neighbors, nearest_node):
         """[Paper Algo 1]: ChooseParent + Insert + Rewire"""
         
-        # 1. CHOOSE PARENT
-        # Use nearest_node as the parent to maintain tree structure.
-        # (Previously tried ALL neighbors, but this caused everything to connect
-        # to ROOT since ROOT has lowest uncertainty, creating a "fan" not a tree)
+        # 1. CHOOSE BEST PARENT (from ALL neighbors, not just nearest)
+        best_parent = None
+        best_belief = None
+
+        # Try nearest_node first
         belief = self.Propagate(nearest_node, q_new)
-        if belief is None:
-            return None  # Can't connect to intended parent
-        
-        best_parent = nearest_node
-        best_belief = belief
+        if belief is not None:
+            best_belief = belief
+            best_parent = nearest_node
+
+        # Try ALL neighbors to find a valid parent with lowest cost
+        for node in neighbors:
+            if node == nearest_node:
+                continue
+            
+            # Geometric check (Simplified: assumes localized connection is safe)
+            # In full implementation, check collision(node -> q_new) here
+            
+            # # Check if path from node to q_new is collision-free
+            # if not self.problem.safe_path(node.value, q_new):
+            #     continue  # Skip this neighbor node b/c path has collision
+            
+            belief = self.Propagate(node, q_new)
+            if belief is not None:
+                if best_belief is None or belief["cost"] < best_belief["cost"]:
+                    best_belief = belief
+                    best_parent = node
+
+        # Only fail if NO neighbor can serve as parent
+        if best_belief is None:
+            return None
 
         # 2. CREATE NODE
         new_node = BeliefNode(

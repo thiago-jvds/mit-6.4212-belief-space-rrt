@@ -26,6 +26,8 @@ from pydrake.all import (
     Rgba,
     RigidTransform,
     RotationMatrix,
+    PiecewisePolynomial,
+    TrajectorySource,
 )
 import argparse
 from src.perception.light_and_dark import LightDarkRegionSystem
@@ -36,9 +38,37 @@ from src.simulation.sim_setup import (
     visualize_noisy_execution,
     visualize_belief_path,
     visualize_belief_tree,
-    visualize_target_uncertainty
 )
+from src.visualization.belief_visualizer import BeliefVisualizerSystem
+from src.estimation.belief_estimator import BeliefEstimatorSystem
 from src.utils.config_loader import load_rrbt_config
+
+
+def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewisePolynomial:
+    """
+    Convert a list of joint configurations to a time-parameterized trajectory.
+    
+    Args:
+        path: List of joint configurations (each is a 7-element array/tuple)
+        time_per_segment: Time allocated per path segment in seconds
+        
+    Returns:
+        PiecewisePolynomial trajectory (7D output matching iiwa.position port)
+    """
+    # Convert path to numpy array (n_points x 7)
+    path_array = np.array([np.array(q) for q in path])
+    
+    # Create time breakpoints
+    n_points = len(path)
+    times = np.linspace(0, (n_points - 1) * time_per_segment, n_points)
+    
+    # Create trajectory using first-order hold (linear interpolation)
+    # PiecewisePolynomial.FirstOrderHold expects:
+    # - breaks: 1D array of times
+    # - samples: 2D array where each column is a sample (7 x n_points)
+    trajectory = PiecewisePolynomial.FirstOrderHold(times, path_array.T)
+    
+    return trajectory
 
 
 def debug_path_beliefs(problem, path):
@@ -259,15 +289,114 @@ def main():
             print("✗ RRBT Failed to find information path.")
             final_path = None
 
-    # --- 7. VISUALIZATION ---
+    # --- 7. EXECUTION DIAGRAM ---
     if final_path:
-        print("✓ Sequence Complete. Visualizing...")
+        print("✓ Sequence Complete. Building Execution Diagram...")
         
-        visualize_target_uncertainty(
-            problem, 
-            final_path, 
-            meshcat, 
+        # Convert path to trajectory
+        trajectory = path_to_trajectory(final_path, time_per_segment=0.02)
+        print(f"   Trajectory duration: {trajectory.end_time():.2f}s ({len(final_path)} waypoints)")
+        
+        # Build the Execution Diagram
+        exec_builder = DiagramBuilder()
+        
+        # Re-load scenario and create new station for execution
+        with open(scenario_path, "r") as f:
+            exec_scenario = LoadScenario(data=f.read())
+        
+        exec_station = exec_builder.AddSystem(
+            MakeHardwareStation(scenario=exec_scenario, meshcat=meshcat)
         )
+        exec_station.set_name("ExecutionStation")
+        
+        exec_plant = exec_station.GetSubsystemByName("plant")
+        
+        # Add TrajectorySource for the planned path (outputs 7D positions)
+        traj_source = exec_builder.AddSystem(TrajectorySource(trajectory))
+        traj_source.set_name("PlannedTrajectorySource")
+        
+        # Connect TrajectorySource to station's iiwa.position input port
+        exec_builder.Connect(
+            traj_source.get_output_port(),
+            exec_station.GetInputPort("iiwa.position")
+        )
+        
+        # Add WSG gripper source (constant open position)
+        exec_wsg_source = exec_builder.AddSystem(ConstantVectorSource([0.1]))
+        exec_wsg_source.set_name("GripperPositionSource")
+        exec_builder.Connect(
+            exec_wsg_source.get_output_port(),
+            exec_station.GetInputPort("wsg.position")
+        )
+        
+        # Add Perception System (LightDarkRegionSystem)
+        exec_perception = exec_builder.AddSystem(
+            LightDarkRegionSystem(
+                plant=exec_plant,
+                light_region_center=config.simulation.light_center,
+                light_region_size=config.simulation.light_size,
+                sigma_light=np.sqrt(float(config.physics.meas_noise_light)),
+                sigma_dark=np.sqrt(float(config.physics.meas_noise_dark)),
+            )
+        )
+        exec_perception.set_name("LightDarkPerception")
+        
+        # Connect perception to station output
+        exec_builder.Connect(
+            exec_station.GetOutputPort("iiwa.position_measured"),
+            exec_perception.GetInputPort("iiwa.position")
+        )
+        
+        # Add Belief Estimator System (Kalman Filter for covariance estimation)
+        # Receives measurement variance from LightDarkRegionSystem (single source of truth)
+        belief_estimator = exec_builder.AddSystem(
+            BeliefEstimatorSystem(
+                initial_sigma=np.eye(7) * 1.0,  # High initial uncertainty
+            )
+        )
+        belief_estimator.set_name("BeliefEstimator")
+        
+        # Connect estimator to perception's measurement_variance output (single source of truth)
+        exec_builder.Connect(
+            exec_perception.GetOutputPort("measurement_variance"),
+            belief_estimator.GetInputPort("measurement_variance")
+        )
+        
+        # Add Belief Visualizer System (renders goal uncertainty ellipsoid)
+        # Receives covariance from BeliefEstimatorSystem
+        belief_viz = exec_builder.AddSystem(
+            BeliefVisualizerSystem(
+                meshcat=meshcat,
+                plant=exec_plant,
+                goal_config=config.simulation.q_goal,
+            )
+        )
+        belief_viz.set_name("BeliefVisualizer")
+        
+        # Connect visualizer to estimator output
+        exec_builder.Connect(
+            belief_estimator.GetOutputPort("covariance"),
+            belief_viz.GetInputPort("covariance")
+        )
+        
+        # Build execution diagram
+        exec_diagram = exec_builder.Build()
+        exec_diagram.set_name("ExecutionDiagram")
+        
+        # Create simulator
+        exec_simulator = Simulator(exec_diagram)
+        exec_simulator.set_target_realtime_rate(1.0)
+        
+        # Setup Meshcat recording
+        meshcat.StartRecording()
+        
+        print("   Running execution simulation...")
+        exec_simulator.AdvanceTo(trajectory.end_time())
+        
+        meshcat.StopRecording()
+        meshcat.PublishRecording()
+        
+        print("✓ Execution Complete! Replay available in Meshcat.")
     else:
         print("✗ No path found.")
 

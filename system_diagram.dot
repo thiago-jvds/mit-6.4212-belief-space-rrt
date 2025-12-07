@@ -1,13 +1,13 @@
-digraph _234 {
+digraph _236 {
 rankdir=LR
-subgraph cluster234diagram {
+subgraph cluster236diagram {
 color=black
 concentrate=true
 label=<<TABLE BORDER="0"><TR><TD>
 <B>Diagram</B><BR/>
-name=MainSystemDiagram
+name=ExecutionDiagram
 </TD></TR></TABLE>>;
-subgraph cluster234subsystems {
+subgraph cluster236subsystems {
 color=white
 label=""
 subgraph cluster218diagram {
@@ -15,7 +15,7 @@ color=black
 concentrate=true
 label=<<TABLE BORDER="0"><TR><TD>
 <B>RobotDiagram</B><BR/>
-name=station
+name=ExecutionStation
 </TD></TR></TABLE>>;
 subgraph clusters218in {
 rank=same
@@ -469,11 +469,11 @@ name=B⁻¹
 </TABLE>
 >];
 s193:y0:e -> s197:u0:w
-s195:y0:e -> s193:u1:w
 s194:y0:e -> s195:u0:w
 s196:y0:e -> s195:u1:w
-s192in:0:e -> s193:u0:w [color=blue];
+s195:y0:e -> s193:u1:w
 s192in:0:e -> s194:u0:w [color=blue];
+s192in:0:e -> s193:u0:w [color=blue];
 s192in:1:e -> s194:u1:w [color=blue];
 s197:y0:e -> s192out:0:w [color=green];
 s193:y0:e -> s192out:1:w [color=green];
@@ -542,9 +542,9 @@ name=state_pass_through
 </TABLE>
 >];
 s188out:0:e -> s192in:1:w
-s201:y0:e -> s202:u0:w
 s192out:1:e -> s201:u0:w
 s188out:0:e -> s200:u0:w
+s201:y0:e -> s202:u0:w
 s185in:0:e -> s192in:0:w [color=blue];
 s185in:0:e -> s186:u0:w [color=blue];
 s185in:0:e -> s204:u0:w [color=blue];
@@ -674,8 +674,8 @@ s214 [shape=none, border=0, label=<
 </TABLE>
 >];
 s213:y0:e -> s214:u1:w
-s212in:0:e -> s214:u0:w [color=blue];
 s212in:0:e -> s213:u0:w [color=blue];
+s212in:0:e -> s214:u0:w [color=blue];
 s214:y0:e -> s212out:0:w [color=green];
 }
 }
@@ -698,12 +698,12 @@ s217 [shape=none, border=0, label=<
 </TR>
 </TABLE>
 >];
+s2:y0:e -> s3:u0:w
+s2:y1:e -> s3:u1:w
 s2:y22:e -> s217:u0:w
 s3:y0:e -> s2:u0:w
 s185out:1:e -> s2:u8:w
 s210out:0:e -> s2:u10:w
-s2:y0:e -> s3:u0:w
-s2:y1:e -> s3:u1:w
 s2:y22:e -> s210in:2:w
 s2:y18:e -> s185in:0:w
 s2:y20:e -> s185in:1:w
@@ -763,15 +763,12 @@ s3:y0:e -> s218out:45:w [color=green];
 s225 [shape=none, border=0, label=<
 <TABLE BORDER="0" CELLSPACING="0">
 <TR><TD BORDER="1" COLSPAN="2">
-<B>src.perception.light_and_dark.LightDarkRegionSystem</B><BR/>
-name=LightDarkRegionSystem
+<B>TrajectorySource</B><BR/>
+name=PlannedTrajectorySource
 </TD></TR>
 <TR>
-<TD PORT="u0" BORDER="1" ROWSPAN="2">iiwa.position</TD>
-<TD PORT="y0" BORDER="1" >target_measurement</TD>
-</TR>
-<TR>
-<TD PORT="y1" BORDER="1" >in_light_region</TD>
+<TD PORT="u0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BL"></TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
 </TR>
 </TABLE>
 >];
@@ -779,7 +776,7 @@ s226 [shape=none, border=0, label=<
 <TABLE BORDER="0" CELLSPACING="0">
 <TR><TD BORDER="1" COLSPAN="2">
 <B>ConstantVectorSource</B><BR/>
-name=IiwaPositionSource
+name=GripperPositionSource
 </TD></TR>
 <TR>
 <TD PORT="u0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BL"></TD>
@@ -790,18 +787,50 @@ name=IiwaPositionSource
 s227 [shape=none, border=0, label=<
 <TABLE BORDER="0" CELLSPACING="0">
 <TR><TD BORDER="1" COLSPAN="2">
-<B>ConstantVectorSource</B><BR/>
-name=WsgPositionSource
+<B>src.perception.light_and_dark.LightDarkRegionSystem</B><BR/>
+name=LightDarkPerception
 </TD></TR>
 <TR>
-<TD PORT="u0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BL"></TD>
-<TD PORT="y0" BORDER="1" >y0</TD>
+<TD PORT="u0" BORDER="1" ROWSPAN="3">iiwa.position</TD>
+<TD PORT="y0" BORDER="1" >target_measurement</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >in_light_region</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >measurement_variance</TD>
 </TR>
 </TABLE>
 >];
-s218out:3:e -> s225:u0:w
-s226:y0:e -> s218in:0:w
-s227:y0:e -> s218in:1:w
+s228 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.estimation.belief_estimator.BeliefEstimatorSystem</B><BR/>
+name=BeliefEstimator
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >measurement_variance</TD>
+<TD PORT="y0" BORDER="1" >covariance</TD>
+</TR>
+</TABLE>
+>];
+s229 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.visualization.belief_visualizer.BeliefVisualizerSystem</B><BR/>
+name=BeliefVisualizer
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >covariance</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+s228:y0:e -> s229:u0:w
+s225:y0:e -> s218in:0:w
+s226:y0:e -> s218in:1:w
+s227:y2:e -> s228:u0:w
+s218out:3:e -> s227:u0:w
 }
 }
 }

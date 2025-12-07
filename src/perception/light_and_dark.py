@@ -47,6 +47,7 @@ class LightDarkRegionSystem(LeafSystem):
 
         self.DeclareVectorOutputPort("target_measurement", 3, self.CalcMeasurement)
         self.DeclareVectorOutputPort("in_light_region", 1, self.CalcRegionCheck)
+        self.DeclareVectorOutputPort("measurement_variance", 1, self.CalcMeasurementVariance)
 
     def _update_internal_context(self, context):
         """Helper to sync internal plant with input 'q'"""
@@ -86,3 +87,29 @@ class LightDarkRegionSystem(LeafSystem):
         noise = self._rng.normal(0, sigma, size=3)
 
         output.SetFromVector(true_pos + noise)
+
+    def CalcMeasurementVariance(self, context, output):
+        """
+        Output the current measurement variance (sigma^2) based on light/dark region.
+        
+        This is the single source of truth for measurement noise - downstream
+        systems like BeliefEstimator should use this rather than having their
+        own copies of sigma_light/sigma_dark.
+        
+        Returns:
+            variance (1D): sigma^2 for the current region
+        """
+        self._update_internal_context(context)
+
+        X_WG = self._plant.EvalBodyPoseInWorld(
+            self._plant_context, self._gripper_body
+        )
+        p_Gripper = X_WG.translation()
+
+        delta = np.abs(p_Gripper - self._center)
+        is_light = np.all(delta <= self._half_size)
+
+        sigma = self._sigma_light if is_light else self._sigma_dark
+        variance = sigma ** 2
+        
+        output.SetFromVector([variance])

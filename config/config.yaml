@@ -11,7 +11,7 @@ physics:
 
   # Sensor Noise:
   # Light: High precision (info gain). Dark: Blind.
-  meas_noise_light: 1e-2
+  meas_noise_light: 0.01
   meas_noise_dark: 1e+9
 
   # Keep buffer to avoid hitting the bottle while exploring

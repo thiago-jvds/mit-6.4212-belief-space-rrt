@@ -1,28 +1,87 @@
+"""
+RRBT Tree - Rapidly-exploring Random Belief Tree
+
+This implements the belief-space RRT with a combined cost function that
+balances path length (distance traveled) and uncertainty (trace of covariance).
+
+Cost Function: cost = path_length + λ × trace(Σ)
+Termination:   trace(Σ) < max_uncertainty
+
+This separation ensures:
+- Small λ → prefer shorter paths during tree growth
+- But planner won't stop until uncertainty threshold is met
+- Result: shortest path that achieves goal uncertainty
+"""
+
 from collections import deque
 from manipulation.exercises.trajectories.rrt_planner.rrt_planning import TreeNode
 import numpy as np
 
 
 class BeliefNode(TreeNode):
-    def __init__(self, value, parent=None, sigma=None, cost=0.0):
+    """
+    A node in the belief-space RRT tree.
+    
+    Attributes:
+        value: Joint configuration (7D tuple)
+        parent: Parent BeliefNode
+        sigma: Covariance matrix (7x7) representing uncertainty
+        path_length: Cumulative joint-space distance from root
+        cost: Combined cost = path_length + λ × trace(Σ)
+    """
+    
+    def __init__(self, value, parent=None, sigma=None, cost=0.0, path_length=0.0):
         super().__init__(value, parent)
 
         # RRBT Specifics
         self.sigma = sigma  # Covariance Matrix (7x7)
-        self.cost = cost  # Trace(Sigma) or cumulative objective
+        self.path_length = path_length  # Cumulative distance from root
+        self.cost = cost  # Combined: path_length + λ × trace(Σ)
 
 
 class RRBT_Tree:
-    def __init__(self, problem, root_value, max_uncertainty, initial_uncertainty=1.0):
+    """
+    Rapidly-exploring Random Belief Tree.
+    
+    Uses a combined cost function to balance:
+    - Path efficiency (minimize distance traveled)
+    - Information gain (minimize uncertainty)
+    
+    Args:
+        problem: IiwaProblemBelief instance
+        root_value: Starting configuration
+        max_uncertainty: Termination threshold for trace(Σ)
+        initial_uncertainty: Initial diagonal value for Σ₀
+        lambda_weight: Trade-off parameter (higher = prioritize uncertainty)
+    """
+    
+    def __init__(
+        self, 
+        problem, 
+        root_value, 
+        max_uncertainty, 
+        initial_uncertainty=1.0,
+        lambda_weight=1.0,
+    ):
         self.problem = problem
         self.cspace = problem.cspace
+        self.lambda_weight = lambda_weight
 
-        # We store the goal threshold, but don't prune intermediate nodes
+        # We store the goal threshold for termination check
         self.GOAL_THRESHOLD = max_uncertainty
 
-        # Initialize Root with HIGH Uncertainty
+        # Initialize Root with HIGH Uncertainty, ZERO path length
         init_sigma = np.eye(7) * initial_uncertainty
-        self.root = BeliefNode(root_value, None, init_sigma, np.trace(init_sigma))
+        init_trace = np.trace(init_sigma)
+        init_cost = 0.0 + lambda_weight * init_trace  # path_length=0 at root
+        
+        self.root = BeliefNode(
+            root_value, 
+            parent=None, 
+            sigma=init_sigma, 
+            cost=init_cost,
+            path_length=0.0,
+        )
         self.nodes = [self.root]
 
     def get_nearest_neighbors(self, config, k=10):
@@ -45,16 +104,24 @@ class RRBT_Tree:
         return False
 
     def Propagate(self, parent_node, q_target):
+        """
+        Propagate belief from parent_node to q_target.
+        
+        Returns dict with:
+            - sigma: Updated covariance matrix
+            - path_length: Cumulative distance from root
+            - cost: Combined cost = path_length + λ × trace(Σ)
+        """
         sigma_parent = parent_node.sigma
 
-        # Get Dynamics (Q is None)
+        # Get Dynamics (Q is None for static target)
         A, _, C, R = self.problem.get_dynamics_and_observation(q_target)
 
         # 1. Prediction (Static Target: Sigma stays constant)
         # sigma_pred = A @ sigma_parent @ A.T + Q (where Q=0, A=I)
         sigma_pred = sigma_parent
 
-        # 2. Update (Measurement reduces Sigma)
+        # 2. Update (Measurement reduces Sigma based on light/dark region)
         S = C @ sigma_pred @ C.T + R
         try:
             K_T = np.linalg.solve(S, (sigma_pred @ C.T).T)
@@ -63,10 +130,20 @@ class RRBT_Tree:
             return None
 
         sigma_new = (np.eye(7) - K @ C) @ sigma_pred
-        cost_new = np.trace(sigma_new)
+        
+        # 3. Compute path length increment
+        dist_increment = self.cspace.distance(parent_node.value, q_target)
+        path_length_new = parent_node.path_length + dist_increment
+        
+        # 4. Compute combined cost
+        trace_sigma = np.trace(sigma_new)
+        cost_new = path_length_new + self.lambda_weight * trace_sigma
 
-        # CHANGE: No pruning here. Return belief even if cost is high.
-        return {"sigma": sigma_new, "cost": cost_new}
+        return {
+            "sigma": sigma_new, 
+            "cost": cost_new,
+            "path_length": path_length_new,
+        }
 
     def InsertNode(self, q_new, neighbors, nearest_node):
         """[Paper Algo 1]: ChooseParent + Insert + Rewire"""
@@ -84,7 +161,11 @@ class RRBT_Tree:
 
         # 2. CREATE NODE
         new_node = BeliefNode(
-            q_new, best_parent, best_belief["sigma"], best_belief["cost"]
+            q_new, 
+            best_parent, 
+            best_belief["sigma"], 
+            best_belief["cost"],
+            best_belief["path_length"],
         )
         best_parent.children.append(new_node)
         self.nodes.append(new_node)
@@ -114,7 +195,6 @@ class RRBT_Tree:
 
             if belief_rewire and belief_rewire["cost"] < node.cost:
                 # REWIRE DETECTED!
-                # Remove from old parent
                 if node in node.parent.children:
                     node.parent.children.remove(node)
 
@@ -122,6 +202,7 @@ class RRBT_Tree:
                 node.parent = new_node
                 node.sigma = belief_rewire["sigma"]
                 node.cost = belief_rewire["cost"]
+                node.path_length = belief_rewire["path_length"]
                 new_node.children.append(node)
 
                 # Propagate improvements downstream
@@ -151,6 +232,7 @@ class RRBT_Tree:
                 if belief:
                     v.sigma = belief["sigma"]
                     v.cost = belief["cost"]
+                    v.path_length = belief["path_length"]
                     queue.append(v)
                 else:
                     # Branch is now invalid/dead due to parent change

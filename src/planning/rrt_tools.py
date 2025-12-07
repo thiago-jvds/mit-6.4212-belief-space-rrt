@@ -55,13 +55,21 @@ class RRT_tools:
 
 class RRBT_tools(RRT_tools):
     def __init__(
-        self, problem, max_uncertainty: float = 0.01, initial_uncertainty: float = 1.0
+        self, 
+        problem, 
+        max_uncertainty: float = 0.01, 
+        initial_uncertainty: float = 1.0,
+        lambda_weight: float = 1.0,
     ) -> None:
         self.problem = problem
         self.MAX_UNCERTAINTY = max_uncertainty
 
         self.rrbt_tree = RRBT_Tree(
-            problem, problem.start, max_uncertainty, initial_uncertainty
+            problem, 
+            problem.start, 
+            max_uncertainty, 
+            initial_uncertainty,
+            lambda_weight=lambda_weight,
         )
 
 
@@ -94,9 +102,14 @@ class RRBT_tools(RRT_tools):
         Active Perception Termination Condition:
         We stop ONLY when we are confident about the target's location.
         We DO NOT check if the robot is geometrically at the goal (we don't know where it is!).
+        
+        IMPORTANT: We check trace(Σ), NOT the combined cost!
+        The combined cost includes path_length which is irrelevant for termination.
+        Termination is purely about achieving low uncertainty.
         """
         # Belief Check: Is the trace of covariance small enough?
-        if node.cost > self.MAX_UNCERTAINTY:
+        uncertainty = np.trace(node.sigma)
+        if uncertainty > self.MAX_UNCERTAINTY:
             return False
 
         # If we are here, we have gathered enough information.

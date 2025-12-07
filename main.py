@@ -256,6 +256,7 @@ def main():
             prob_sample_q_goal=float(config.planner.prob_sample_goal),
             prob_sample_q_light=float(config.planner.prob_sample_light),
             max_uncertainty=float(config.planner.max_uncertainty),
+            lambda_weight=float(config.planner.lambda_weight),
             q_light_hint=np.array(config.planner.q_light_hint),
             visualize_callback=None, # Set to tree_viz_callback to see tree grow
             visualize_interval=1000

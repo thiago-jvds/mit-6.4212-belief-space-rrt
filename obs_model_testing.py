@@ -13,6 +13,7 @@ Then open http://localhost:7000 in your browser.
 
 import numpy as np
 import time
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Tuple, Optional
 from dataclasses import dataclass, field
@@ -28,10 +29,42 @@ from pydrake.all import (
     Rgba,
     RigidTransform,
     RotationMatrix,
+    PiecewisePolynomial,
+    TrajectorySource,
 )
 from pydrake.multibody.math import SpatialVelocity
 from src.perception.light_and_dark import LightDarkRegionSystem
 from src.utils.config_loader import load_rrbt_config
+from src.planning.standard_rrt import rrt_planning
+from src.simulation.simulation_tools import IiwaProblem
+from src.utils.ik_solver import solve_ik_for_pose
+
+
+def path_to_trajectory(path: list, time_per_segment: float = 0.1) -> PiecewisePolynomial:
+    """
+    Convert a list of joint configurations to a time-parameterized trajectory.
+    
+    Args:
+        path: List of joint configurations (each is a 7-element array/tuple)
+        time_per_segment: Time allocated per path segment in seconds
+        
+    Returns:
+        PiecewisePolynomial trajectory (7D output matching iiwa.position port)
+    """
+    # Convert path to numpy array (n_points x 7)
+    path_array = np.array([np.array(q) for q in path])
+    
+    # Create time breakpoints
+    n_points = len(path)
+    times = np.linspace(0, (n_points - 1) * time_per_segment, n_points)
+    
+    # Create trajectory using first-order hold (linear interpolation)
+    # PiecewisePolynomial.FirstOrderHold expects:
+    # - breaks: 1D array of times
+    # - samples: 2D array where each column is a sample (7 x n_points)
+    trajectory = PiecewisePolynomial.FirstOrderHold(times, path_array.T)
+    
+    return trajectory
 
 
 @dataclass
@@ -1076,6 +1109,224 @@ class ObservationModel:
         }
 
 
+def depth_to_color_image(
+    depth_image: np.ndarray,
+    min_depth: float = 0.1,
+    max_depth: float = 2.0,
+    colormap: str = "turbo",
+    invalid_color: Tuple[int, int, int] = (0, 0, 0),
+) -> np.ndarray:
+    """
+    Convert a depth image to a color image for visualization.
+    
+    Args:
+        depth_image: (H, W) depth image in meters
+        min_depth: Minimum depth for colormap scaling (meters)
+        max_depth: Maximum depth for colormap scaling (meters)
+        colormap: Colormap name ("turbo", "jet", "viridis", "grayscale")
+        invalid_color: RGB color for invalid depth values (inf, nan, 0)
+        
+    Returns:
+        (H, W, 3) uint8 RGB image
+    """
+    # Ensure 2D
+    if depth_image.ndim == 3:
+        depth_image = depth_image.squeeze()
+    
+    H, W = depth_image.shape
+    
+    # Identify valid depth values
+    valid_mask = np.isfinite(depth_image) & (depth_image > 0)
+    
+    # Normalize depth to [0, 1] range
+    depth_normalized = np.zeros_like(depth_image)
+    depth_normalized[valid_mask] = np.clip(
+        (depth_image[valid_mask] - min_depth) / (max_depth - min_depth),
+        0.0, 1.0
+    )
+    
+    # Apply colormap
+    if colormap == "grayscale":
+        # Grayscale: near = white, far = black
+        gray = ((1.0 - depth_normalized) * 255).astype(np.uint8)
+        color_image = np.stack([gray, gray, gray], axis=-1)
+    elif colormap == "turbo":
+        # Turbo colormap (perceptually uniform, good for depth)
+        color_image = _apply_turbo_colormap(depth_normalized)
+    elif colormap == "jet":
+        # Jet colormap
+        color_image = _apply_jet_colormap(depth_normalized)
+    else:
+        # Default to grayscale
+        gray = ((1.0 - depth_normalized) * 255).astype(np.uint8)
+        color_image = np.stack([gray, gray, gray], axis=-1)
+    
+    # Set invalid pixels to invalid_color
+    color_image[~valid_mask] = invalid_color
+    
+    return color_image
+
+
+def _apply_turbo_colormap(normalized: np.ndarray) -> np.ndarray:
+    """Apply turbo colormap to normalized [0,1] values."""
+    # Simplified turbo colormap approximation
+    # Based on Google's Turbo colormap
+    r = np.clip(np.where(normalized < 0.5,
+                         0.5 + normalized * 3.0,
+                         2.5 - normalized * 3.0), 0, 1)
+    g = np.clip(np.where(normalized < 0.25,
+                         normalized * 4.0,
+                         np.where(normalized < 0.75,
+                                  1.0,
+                                  (1.0 - normalized) * 4.0)), 0, 1)
+    b = np.clip(np.where(normalized < 0.5,
+                         1.5 - normalized * 3.0,
+                         normalized * 3.0 - 1.5), 0, 1)
+    
+    # Invert so near is warm (red/yellow), far is cool (blue)
+    r, b = b, r
+    
+    rgb = np.stack([r, g, b], axis=-1)
+    return (rgb * 255).astype(np.uint8)
+
+
+def _apply_jet_colormap(normalized: np.ndarray) -> np.ndarray:
+    """Apply jet colormap to normalized [0,1] values."""
+    # Jet colormap: blue -> cyan -> green -> yellow -> red
+    r = np.clip(1.5 - np.abs(normalized - 0.75) * 4, 0, 1)
+    g = np.clip(1.5 - np.abs(normalized - 0.5) * 4, 0, 1)
+    b = np.clip(1.5 - np.abs(normalized - 0.25) * 4, 0, 1)
+    
+    rgb = np.stack([r, g, b], axis=-1)
+    return (rgb * 255).astype(np.uint8)
+
+
+class CameraVisualizer:
+    """
+    Real-time camera feed visualizer using matplotlib.
+    Displays depth and RGB images in separate windows that update in real-time.
+    
+    Note: For macOS, you need:
+    1. Install XQuartz: brew install --cask xquartz
+    2. Enable X11 forwarding in XQuartz preferences
+    3. Restart XQuartz and rebuild the devcontainer
+    """
+    
+    def __init__(self, show_depth: bool = True, show_rgb: bool = True):
+        self.show_depth = show_depth
+        self.show_rgb = show_rgb
+        self.depth_fig = None
+        self.depth_ax = None
+        self.depth_im = None
+        self.rgb_fig = None
+        self.rgb_ax = None
+        self.rgb_im = None
+        self.display_available = True
+        
+        # Check if display is available
+        import os
+        display = os.environ.get('DISPLAY')
+        if not display:
+            print("⚠ WARNING: DISPLAY environment variable not set.")
+            print("  Matplotlib windows will not be displayed.")
+            print("  For macOS: Install XQuartz and set DISPLAY in devcontainer.json")
+            self.display_available = False
+            return
+        
+        try:
+            # Try to initialize matplotlib with a non-GUI backend first to test
+            # If this fails, we'll catch it and use a fallback
+            import matplotlib
+            # Force TkAgg backend for better compatibility
+            matplotlib.use('TkAgg', force=True)
+            
+            # Initialize matplotlib in interactive mode
+            plt.ion()
+            
+            if self.show_depth:
+                self.depth_fig, self.depth_ax = plt.subplots(1, 1, figsize=(8, 6))
+                self.depth_ax.set_title("Depth Camera Feed", fontsize=14)
+                self.depth_ax.axis('off')
+                self.depth_fig.canvas.manager.set_window_title("Depth Camera")
+                plt.tight_layout()
+            
+            if self.show_rgb:
+                self.rgb_fig, self.rgb_ax = plt.subplots(1, 1, figsize=(8, 6))
+                self.rgb_ax.set_title("RGB Camera Feed", fontsize=14)
+                self.rgb_ax.axis('off')
+                self.rgb_fig.canvas.manager.set_window_title("RGB Camera")
+                plt.tight_layout()
+        except Exception as e:
+            print(f"⚠ WARNING: Could not initialize matplotlib display: {e}")
+            print("  Camera feeds will not be displayed.")
+            print("  Check X11 forwarding configuration.")
+            self.display_available = False
+    
+    def update_depth(self, depth_image: np.ndarray, min_depth: float = 0.1, max_depth: float = 2.0):
+        """Update the depth image display."""
+        if not self.show_depth or not self.display_available:
+            return
+        
+        # Ensure 2D
+        if depth_image.ndim == 3:
+            depth_image = depth_image.squeeze()
+        
+        if self.depth_im is None:
+            # First time: create image
+            self.depth_im = self.depth_ax.imshow(
+                depth_image,
+                cmap='turbo',
+                vmin=min_depth,
+                vmax=max_depth,
+                interpolation='nearest'
+            )
+            self.depth_fig.colorbar(self.depth_im, ax=self.depth_ax, label='Depth (m)')
+        else:
+            # Update existing image
+            self.depth_im.set_data(depth_image)
+        
+        # Refresh display
+        self.depth_fig.canvas.draw()
+        self.depth_fig.canvas.flush_events()
+    
+    def update_rgb(self, rgb_image: np.ndarray):
+        """Update the RGB image display."""
+        if not self.show_rgb or not self.display_available:
+            return
+        
+        # Ensure correct shape and type
+        if rgb_image.ndim == 3:
+            if rgb_image.shape[-1] == 4:
+                rgb_image = rgb_image[:, :, :3]  # Remove alpha channel
+        else:
+            return
+        
+        if rgb_image.dtype != np.uint8:
+            if rgb_image.max() <= 1.0:
+                rgb_image = (rgb_image * 255).astype(np.uint8)
+            else:
+                rgb_image = rgb_image.astype(np.uint8)
+        
+        if self.rgb_im is None:
+            # First time: create image
+            self.rgb_im = self.rgb_ax.imshow(rgb_image, interpolation='nearest')
+        else:
+            # Update existing image
+            self.rgb_im.set_data(rgb_image)
+        
+        # Refresh display
+        self.rgb_fig.canvas.draw()
+        self.rgb_fig.canvas.flush_events()
+    
+    def close(self):
+        """Close all figure windows."""
+        if self.depth_fig:
+            plt.close(self.depth_fig)
+        if self.rgb_fig:
+            plt.close(self.rgb_fig)
+        plt.ioff()
+
+
 def visualize_camera_frustum(
     meshcat: Meshcat,
     plant,
@@ -1088,6 +1339,7 @@ def visualize_camera_frustum(
     far_distance: float = 1.0,
     frustum_name: str = "camera_frustum",
     color: Rgba = Rgba(0.2, 0.6, 1.0, 0.7),
+    verbose: bool = True,
 ):
     """
     Visualize the view frustum of an RGBD camera in Meshcat.
@@ -1186,7 +1438,8 @@ def visualize_camera_frustum(
         color,
     )
     
-    print(f"  Camera frustum visualized: FOV={fov_y_deg}°, range=[{near_distance}, {far_distance}]m")
+    if verbose:
+        print(f"  Camera frustum visualized: FOV={fov_y_deg}°, range=[{near_distance}, {far_distance}]m")
 
 
 def main():
@@ -1226,6 +1479,178 @@ def main():
     with open(scenario_path, "r") as f:
         scenario = LoadScenario(data=f.read())
 
+    # ====== GOAL POSE CONFIGURATION ======
+    # Option 1: Use joint angles from config file
+    # Option 2: Use a world-frame transform (X_WG) and solve IK
+    #
+    # Set USE_TRANSFORM_GOAL = True to use a world-frame transform
+    # Set USE_TRANSFORM_GOAL = False to use joint angles from config
+    
+    USE_TRANSFORM_GOAL = True  # <-- Change this to switch modes
+    
+    q_home = config.simulation.q_home
+    
+    # Compute what the config q_goal corresponds to in world frame
+    # This helps us understand what transform to use
+    print("\n" + "=" * 60)
+    print("COMPUTING CONFIG Q_GOAL WORLD TRANSFORM")
+    print("=" * 60)
+    temp_builder_for_config = DiagramBuilder()
+    temp_station_for_config = temp_builder_for_config.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=None))
+    temp_diagram_for_config = temp_builder_for_config.Build()
+    temp_context_for_config = temp_diagram_for_config.CreateDefaultContext()
+    temp_plant_for_config = temp_station_for_config.GetSubsystemByName("plant")
+    
+    config_q_goal = np.array(config.simulation.q_goal)
+    temp_plant_context_for_config = temp_plant_for_config.CreateDefaultContext()
+    iiwa_model_for_config = temp_plant_for_config.GetModelInstanceByName("iiwa")
+    temp_plant_for_config.SetPositions(temp_plant_context_for_config, iiwa_model_for_config, config_q_goal)
+    wsg_body_for_config = temp_plant_for_config.GetBodyByName("body", temp_plant_for_config.GetModelInstanceByName("wsg"))
+    X_WG_config_goal = temp_plant_for_config.EvalBodyPoseInWorld(temp_plant_context_for_config, wsg_body_for_config)
+    
+    print(f"Config q_goal: {config_q_goal}")
+    print(f"Corresponding world transform:")
+    print(f"  Position (x, y, z): {X_WG_config_goal.translation()}")
+    print(f"  Rotation matrix:\n{X_WG_config_goal.rotation().matrix()}")
+    print("=" * 60)
+    
+    # Clean up
+    del temp_builder_for_config, temp_station_for_config, temp_diagram_for_config, temp_context_for_config, temp_plant_for_config
+    
+    if USE_TRANSFORM_GOAL:
+        # ====== Define goal as a world-frame transform ======
+        # X_WG_goal is the desired pose of the gripper body frame in world coordinates
+        # The gripper frame has:
+        #   - Z pointing forward (along fingers)
+        #   - X pointing to the right (between fingers)
+        #   - Y pointing up (perpendicular to palm)
+        
+        # ====== Translation Offset ======
+        # Apply a translation offset to the config goal position
+        # Set this to [0, 0, 0] to use the exact config goal position
+        # Or modify to shift the goal relative to the config position
+        # Example: [0.1, 0.0, 0.05] moves 10cm in X, 5cm in Z
+        translation_offset = np.array([-0.15, 0.0, -0.1])  # (dx, dy, dz) in meters
+        
+        # Use the config q_goal transform (computed above) with optional offset
+        goal_position = X_WG_config_goal.translation() + translation_offset
+        goal_rotation = X_WG_config_goal.rotation()
+        
+        # You can also override completely by uncommenting these:
+        # goal_position = np.array([0.4, 0.0, 0.5])  # (x, y, z) in meters
+        # goal_rotation = RotationMatrix.MakeXRotation(np.pi)  # Example rotation
+        
+        X_WG_goal = RigidTransform(goal_rotation, goal_position)
+        
+        print("\n" + "=" * 60)
+        print("GOAL POSE (World Frame Transform)")
+        print("=" * 60)
+        print(f"  Config goal position: {X_WG_config_goal.translation()}")
+        print(f"  Translation offset: {translation_offset}")
+        print(f"  Final position (x, y, z): {goal_position}")
+        print(f"  Rotation matrix:\n{goal_rotation.matrix()}")
+        
+        # Create a temporary plant for IK (we need this before building the main diagram)
+        temp_builder = DiagramBuilder()
+        temp_station = temp_builder.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=None))
+        temp_diagram = temp_builder.Build()
+        temp_context = temp_diagram.CreateDefaultContext()
+        temp_plant = temp_station.GetSubsystemByName("plant")
+        
+        print("\nSolving IK for goal pose...")
+        print(f"  Target position: {goal_position}")
+        print(f"  Target rotation:\n{goal_rotation.matrix()}")
+        try:
+            q_goal = solve_ik_for_pose(
+                plant=temp_plant,
+                X_WG_target=X_WG_goal,
+                q_nominal=tuple(q_home),
+                theta_bound=0.05,  # Orientation tolerance (radians)
+                pos_tol=0.01,      # Position tolerance (meters)
+            )
+            print(f"✓ IK Success!")
+            print(f"  q_goal: {np.round(q_goal, 3)}")
+            
+            # Verify the IK solution actually achieves the desired pose
+            temp_plant_context = temp_plant.CreateDefaultContext()
+            iiwa_model = temp_plant.GetModelInstanceByName("iiwa")
+            temp_plant.SetPositions(temp_plant_context, iiwa_model, q_goal)
+            wsg_body = temp_plant.GetBodyByName("body", temp_plant.GetModelInstanceByName("wsg"))
+            X_WG_achieved = temp_plant.EvalBodyPoseInWorld(temp_plant_context, wsg_body)
+            
+            position_error = np.linalg.norm(X_WG_achieved.translation() - X_WG_goal.translation())
+            print(f"  Desired position: {X_WG_goal.translation()}")
+            print(f"  Achieved position: {X_WG_achieved.translation()}")
+            print(f"  Position error: {position_error:.4f}m")
+            
+            if position_error > 0.02:  # More than 2cm error
+                print(f"  ⚠ Warning: Large position error! IK may not have converged properly.")
+            
+            # Store the desired goal for visualization
+            X_WG_desired = X_WG_goal
+            
+        except RuntimeError as e:
+            print(f"✗ IK Failed: {e}")
+            print("  Falling back to config q_goal")
+            print(f"  This usually means the target pose is unreachable or the IK solver")
+            print(f"  couldn't find a solution. Try adjusting the goal position or rotation.")
+            q_goal = config.simulation.q_goal
+            X_WG_desired = None  # No desired pose to visualize
+        
+        # Clean up temporary resources
+        del temp_builder, temp_station, temp_diagram, temp_context, temp_plant
+        
+    else:
+        # ====== Use joint angles from config ======
+        q_goal = config.simulation.q_goal
+        X_WG_desired = None  # No desired transform when using config
+        print("\n" + "=" * 60)
+        print("GOAL POSE (Joint Angles from Config)")
+        print("=" * 60)
+    
+    print("=" * 60)
+
+    # ====== RRT Planning ======
+    print("\n" + "=" * 60)
+    print("RRT PLANNING")
+    print("=" * 60)
+    print(f"  Start: {q_home}")
+    print(f"  Goal: {q_goal}")
+    
+    # Create IiwaProblem for RRT planning (uses its own internal collision checker)
+    rrt_problem = IiwaProblem(
+        q_start=q_home,
+        q_goal=q_goal,
+        gripper_setpoint=0.1,
+        meshcat=meshcat,
+        is_visualizing=False,  # Don't visualize during planning for speed
+    )
+    
+    # Run RRT planning
+    print("\nRunning RRT planning...")
+    rrt_path, rrt_iterations = rrt_planning(
+        rrt_problem,
+        max_iterations=1000,
+        prob_sample_q_goal=0.05,
+    )
+    
+    if rrt_path:
+        print(f"✓ RRT found path in {rrt_iterations} iterations")
+        print(f"  Path length: {len(rrt_path)} waypoints")
+        # Convert path to trajectory for execution
+        TIME_PER_SEGMENT = 0.1  # Time per waypoint in seconds
+        trajectory = path_to_trajectory(rrt_path, time_per_segment=TIME_PER_SEGMENT)
+        trajectory_duration = trajectory.end_time()
+        print(f"  Trajectory duration: {trajectory_duration:.1f} seconds")
+    else:
+        print(f"✗ RRT failed to find path after {rrt_iterations} iterations")
+        print("  Robot will stay at home position.")
+        rrt_path = None
+        trajectory = None
+        trajectory_duration = 0.0
+    
+    print("=" * 60)
+
     # Build the diagram
     builder = DiagramBuilder()
     station = builder.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=meshcat))
@@ -1248,9 +1673,17 @@ def main():
         perception_sys.GetInputPort("iiwa.position"),
     )
 
-    # Set robot joint positions
-    q_home = config.simulation.q_home
-    iiwa_position_source = builder.AddSystem(ConstantVectorSource(q_home))
+    # ====== Robot Position Source ======
+    # If RRT found a path, use TrajectorySource to execute it
+    # Otherwise, use ConstantVectorSource at home position
+    if trajectory is not None:
+        iiwa_position_source = builder.AddSystem(TrajectorySource(trajectory))
+        iiwa_position_source.set_name("PlannedTrajectorySource")
+        print("✓ Using TrajectorySource for robot motion")
+    else:
+        iiwa_position_source = builder.AddSystem(ConstantVectorSource(q_home))
+        print("✓ Using ConstantVectorSource (robot stays at home)")
+    
     builder.Connect(
         iiwa_position_source.get_output_port(), station.GetInputPort("iiwa.position")
     )
@@ -1317,21 +1750,32 @@ def main():
     )
 
     # Visualize goal pose
-    q_goal = config.simulation.q_goal
-    plant_context = plant.CreateDefaultContext()
     iiwa = plant.GetModelInstanceByName("iiwa")
-    plant.SetPositions(plant_context, iiwa, q_goal)
+    goal_plant_context = plant.CreateDefaultContext()
+    plant.SetPositions(goal_plant_context, iiwa, q_goal)
 
     wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
-    X_Goal = plant.EvalBodyPoseInWorld(plant_context, wsg_body)
+    X_Goal_achieved = plant.EvalBodyPoseInWorld(goal_plant_context, wsg_body)
 
-    # AddMeshcatTriad(meshcat, "goal_pose", length=0.2, radius=0.005)
-    # meshcat.SetTransform("goal_pose", X_Goal)
+    # Visualize achieved goal pose (where robot will actually go)
+    AddMeshcatTriad(meshcat, "goal_pose_achieved", length=0.2, radius=0.005)
+    meshcat.SetTransform("goal_pose_achieved", X_Goal_achieved)
+    # Add green sphere to mark achieved position
+    meshcat.SetObject("goal_pose_achieved/sphere", Box(0.02, 0.02, 0.02), Rgba(0, 1, 0, 0.8))
+    
+    # If using transform mode, also visualize desired pose
+    if USE_TRANSFORM_GOAL and X_WG_desired is not None:
+        AddMeshcatTriad(meshcat, "goal_pose_desired", length=0.15, radius=0.003)
+        meshcat.SetTransform("goal_pose_desired", X_WG_desired)
+        # Add red sphere to mark desired position
+        meshcat.SetObject("goal_pose_desired/sphere", Box(0.02, 0.02, 0.02), Rgba(1, 0, 0, 0.8))
+        print(f"\nGoal visualization:")
+        print(f"  Red sphere/triad = Desired pose (from transform)")
+        print(f"  Green sphere/triad = Achieved pose (from IK solution)")
 
-    # Advance simulation to allow physics to act on free-floating bodies
-    # If plant is continuous, this will simulate gravity and collisions
-    print("\nAdvancing simulation to allow physics...")
-    simulator.AdvanceTo(1.0)  # Advance 1 second to see physics effects
+    # Advance simulation briefly to initialize
+    print("\nInitializing simulation...")
+    simulator.AdvanceTo(0.01)
 
     # Get the context after simulation to get current robot pose
     context = simulator.get_context()
@@ -1473,31 +1917,83 @@ def main():
     print("  Open http://localhost:7000 in your browser to view the scenario.")
     print("  The wrist camera is mounted on the robot's end-effector.")
     print("  Camera frustum is shown in light blue.")
+    print("  Camera feeds will open in separate matplotlib windows.")
     print("  Voxel grid will update based on DEPTH measurements:")
     print("    - Yellow (0.5) = unknown/uncertain")
     print("    - Transparent = confident FREE (empty space)")
     print("    - Translucent Red = confident OCCUPIED (surface detected)")
     print("\n" + "=" * 60)
-    print("STARTING DEPTH-BASED OBSERVATION LOOP")
+    if trajectory is not None:
+        print("EXECUTING RRT TRAJECTORY WITH OBSERVATION LOOP")
+        print(f"  Trajectory duration: {trajectory_duration:.1f}s")
+    else:
+        print("STARTING DEPTH-BASED OBSERVATION LOOP")
     print("=" * 60)
     print("  Observations inferred from actual depth image...")
     print("  Press Ctrl+C to exit.\n")
 
     # ====== Dynamic Observation Loop ======
-    # Continuously observe and update voxel beliefs using depth-based inference
+    # Execute trajectory while observing and updating voxel beliefs
     observation_count = 0
-    update_interval = 0.1  # seconds between updates
+    sim_time_step = 0.1  # Simulation time step in seconds
     
-    # Get depth image output port from station
+    # Get image output ports from station
     depth_port = station.GetOutputPort("wrist_camera_sensor.depth_image")
+    
+    # Try to get RGB image port (may not exist depending on camera config)
+    try:
+        rgb_port = station.GetOutputPort("wrist_camera_sensor.rgb_image")
+        has_rgb = True
+        print("  RGB camera stream available.")
+    except RuntimeError:
+        rgb_port = None
+        has_rgb = False
+        print("  RGB camera stream not available (depth only).")
+    
+    # Initialize camera visualizer
+    camera_visualizer = CameraVisualizer(show_depth=True, show_rgb=has_rgb)
+    print("  Camera visualizer initialized - matplotlib windows will open.")
+    
+    # Track trajectory execution state
+    trajectory_complete = False
     
     try:
         while True:
+            # Get current simulation time
+            current_time = simulator.get_context().get_time()
+            
+            # Check if trajectory is complete
+            if trajectory is not None and not trajectory_complete:
+                if current_time >= trajectory_duration:
+                    trajectory_complete = True
+                    print(f"\n✓ Trajectory complete at t={current_time:.1f}s")
+                    print("  Robot is now at goal position.")
+                    print("  Continuing observations... (Press Ctrl+C to exit)")
+            
             # Get current context and camera pose from simulation
             context = simulator.get_context()
             station_context = station.GetMyContextFromRoot(context)
             plant_sim_context = plant.GetMyContextFromRoot(context)
             X_WCamera = plant.EvalBodyPoseInWorld(plant_sim_context, camera_body)
+            
+            # Update camera frustum visualization as robot moves
+            visualize_camera_frustum(
+                meshcat=meshcat,
+                plant=plant,
+                plant_context=plant_sim_context,
+                camera_body_name="base",
+                camera_model_name="wrist_camera",
+                fov_y_deg=45.0,
+                aspect_ratio=640.0 / 480.0,
+                near_distance=0.02,
+                far_distance=2.0,
+                frustum_name="wrist_camera_frustum",
+                color=Rgba(0.2, 0.6, 1.0, 0.8),
+                verbose=False,  # Don't print every iteration
+            )
+            
+            # Update camera frame triad as robot moves
+            meshcat.SetTransform("camera_frame", X_WCamera)
             
             # Get depth image from camera
             depth_image_obj = depth_port.Eval(station_context)
@@ -1507,6 +2003,21 @@ def main():
                 depth_image = depth_image.reshape(obs_model.image_height, obs_model.image_width)
             elif depth_image.ndim == 3:
                 depth_image = depth_image.squeeze()
+            
+            # Update depth visualization
+            camera_visualizer.update_depth(depth_image, min_depth=0.1, max_depth=2.0)
+            
+            # Get and visualize RGB image if available
+            if has_rgb:
+                rgb_image_obj = rgb_port.Eval(station_context)
+                rgb_image = np.array(rgb_image_obj.data, copy=True)
+                # Reshape if needed - Drake RGB images are typically (H, W, 4) RGBA
+                if rgb_image.ndim == 1:
+                    rgb_image = rgb_image.reshape(obs_model.image_height, obs_model.image_width, -1)
+                # Convert RGBA to RGB if needed
+                if rgb_image.shape[-1] == 4:
+                    rgb_image = rgb_image[:, :, :3]
+                camera_visualizer.update_rgb(rgb_image)
             
             # Update voxel grid using DEPTH-BASED observations (realistic)
             # Occupancy is inferred from the actual depth image, not ground truth
@@ -1530,6 +2041,10 @@ def main():
             
             observation_count += 1
             
+            # Advance simulation to move the robot along trajectory
+            next_time = current_time + sim_time_step
+            simulator.AdvanceTo(next_time)
+            
             # Print progress every 10 observations
             if observation_count % 10 == 0:
                 # Compute statistics
@@ -1538,22 +2053,35 @@ def main():
                 num_confident_occupied = np.sum(voxel_grid.occupancy > 0.8)
                 num_unknown = voxel_grid.total_voxels - num_confident_free - num_confident_occupied
                 
-                print(f"[Obs #{observation_count:4d}] Visible: {len(visible_indices):3d} "
-                      f"(occ={num_occ:2d}, free={num_free:3d}) | "
-                      f"Grid: free={num_confident_free}, occ={num_confident_occupied}, unk={num_unknown}")
-            
-            time.sleep(update_interval)
+                # Show trajectory progress if executing
+                if trajectory is not None and not trajectory_complete:
+                    progress = min(100.0, (current_time / trajectory_duration) * 100)
+                    print(f"[t={current_time:5.1f}s/{trajectory_duration:.0f}s ({progress:5.1f}%)] "
+                          f"Obs #{observation_count:3d} | "
+                          f"Grid: free={num_confident_free}, occ={num_confident_occupied}, unk={num_unknown}")
+                else:
+                    print(f"[t={current_time:5.1f}s] Obs #{observation_count:3d} | "
+                          f"Visible: {len(visible_indices):3d} (occ={num_occ:2d}, free={num_free:3d}) | "
+                          f"Grid: free={num_confident_free}, occ={num_confident_occupied}, unk={num_unknown}")
             
     except KeyboardInterrupt:
+        final_time = simulator.get_context().get_time()
         print("\n\n" + "=" * 60)
         print("OBSERVATION LOOP STOPPED")
         print("=" * 60)
+        print(f"  Simulation time: {final_time:.1f}s")
         print(f"  Total observations: {observation_count}")
+        if trajectory is not None:
+            print(f"  Trajectory progress: {min(100, final_time/trajectory_duration*100):.1f}%")
         print(f"  Final mean occupancy: {np.mean(voxel_grid.occupancy):.4f}")
         print(f"  Voxels confident FREE (P<0.2): {np.sum(voxel_grid.occupancy < 0.2)}/{voxel_grid.total_voxels}")
         print(f"  Voxels confident OCCUPIED (P>0.8): {np.sum(voxel_grid.occupancy > 0.8)}/{voxel_grid.total_voxels}")
         print(f"  Voxels uncertain (0.2≤P≤0.8): {np.sum((voxel_grid.occupancy >= 0.2) & (voxel_grid.occupancy <= 0.8))}/{voxel_grid.total_voxels}")
         print("=" * 60)
+    finally:
+        # Close camera visualizer windows
+        camera_visualizer.close()
+        print("  Camera visualizer closed.")
 
 
 if __name__ == "__main__":

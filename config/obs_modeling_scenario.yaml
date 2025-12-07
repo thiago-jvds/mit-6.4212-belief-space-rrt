@@ -66,7 +66,7 @@ directives:
     child: wrist_camera::base
     X_PC:
       translation: [ -0.095, 0, 0 ] # Mounted slightly "above" the gripper (in gripper frame)
-      rotation: !Rpy { deg: [ -150, 180, 90 ] } # Looking forward
+      rotation: !Rpy { deg: [ -180, 180, 90 ] } # Looking forward
 
 # 8. Define the Sensors
 # This tells Drake to render images from the camera body we just added

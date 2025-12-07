@@ -278,7 +278,7 @@ def main():
             path_to_grasp, _ = rrt_planning(
                 problemRRT, 
                 max_iterations=1000,
-                prob_sample_q_goal=0.15, # High bias for short grasp
+                prob_sample_q_goal=0.25, # High bias for short grasp
             )
             
             if path_to_grasp:

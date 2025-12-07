@@ -108,6 +108,13 @@ def rrbt_planning(
                         f"PathLen={last_node.path_length:.2f}, "
                         f"Cost={best_cost:.4f}"
                     )
+            elif first_solution_iter is not None:
+                print(
+                    f"\n            Found another solution at iter {k + 1}: "
+                    f"Uncertainty={uncertainty:.4f}, "
+                    f"PathLen={last_node.path_length:.2f}, "
+                    f"Cost={best_cost:.4f}"
+                )
 
         # Visualize progress
         if visualize_callback and (k + 1) % visualize_interval == 0:

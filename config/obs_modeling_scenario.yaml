@@ -51,8 +51,8 @@ directives:
     file: package://drake_models/ycb/006_mustard_bottle.sdf
     default_free_body_pose:
       base_link_mustard:
-        translation: [ 0.4, 0, 0.45 ]
-        rotation: !Rpy { deg: [ -90, 0, -90 ] }
+        translation: [ 0.415, 0, 0.45 ]
+        rotation: !Rpy { deg: [ -90, 0, 90 ] }
 
 # 7. Add the Camera (Physical Body)
 # We weld a camera box to the top of last link 

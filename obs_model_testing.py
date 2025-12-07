@@ -300,16 +300,15 @@ class VoxelGrid:
         """
         Convert occupancy probability to RGBA color.
         
-        Color:
-        - prob = 1.0 -> Red (occupied)
-        - prob = 0.5 -> Yellow (unknown, starting state)
-        - prob = 0.0 -> Green (free)
+        Color gradient:
+        - prob = 0.0 (free) -> Green
+        - prob = 0.5 (unknown) -> Yellow  
+        - prob = 1.0 (occupied) -> Red
         
-        Transparency:
-        - prob = 0.5 (uncertain) -> Completely opaque (alpha = 1.0)
-        - prob = 1.0 (certain occupied) -> Completely opaque (alpha = 1.0)
-        - prob = 0.0 (certain unoccupied) -> Completely transparent (alpha = 0.0)
-        - prob <= 0.01 (>=99% confident free) -> Completely transparent (alpha = 0.0)
+        Transparency gradient:
+        - prob = 0.0 (certain free) -> Transparent (invisible)
+        - prob = 0.5 (uncertain) -> Opaque (visible, needs resolution)
+        - prob = 1.0 (certain occupied) -> Translucent red (visible but see-through)
         """
         # Color interpolation: yellow at 0.5 (unknown), red at 1.0 (occupied), green at 0.0 (free)
         if prob < 0.5:
@@ -325,26 +324,24 @@ class VoxelGrid:
             g = 1.0 - t  # 1.0 -> 0 (yellow to red)
             b = 0.0  # No blue
         
-        # Alpha mapping:
-        # - prob = 0.5 (uncertain) -> alpha = 1.0 (completely opaque yellow)
-        # - prob = 1.0 (certain occupied) -> alpha = 1.0 (completely opaque red)
-        # - prob = 0.0 (certain unoccupied) -> alpha = 0.0 (completely transparent green)
-        # - prob <= 0.01 (>=99% confident free) -> alpha = 0.0 (completely transparent)
+        # Alpha mapping for both free AND occupied confidence:
+        # - prob = 0.0 (certain free) -> transparent (invisible)
+        # - prob = 0.5 (uncertain) -> opaque (visible, needs resolution)
+        # - prob = 1.0 (certain occupied) -> translucent red (visible but see-through)
         
         if prob <= 0.01:
-            # Completely transparent for highly confident free voxels
+            # Completely transparent for highly confident FREE voxels
             actual_alpha = 0.0
         elif prob >= 0.99:
-            # Completely opaque for highly confident occupied voxels
-            actual_alpha = 1.0
+            # Translucent for highly confident OCCUPIED voxels (can see through)
+            actual_alpha = 0.6
         elif prob <= 0.5:
-            # Interpolate from transparent (prob=0) to opaque (prob=0.5)
-            # Linear interpolation: alpha = 2 * prob
+            # Free side: fade from transparent (prob=0) to opaque (prob=0.5)
             actual_alpha = 2.0 * prob
         else:
-            # For prob in (0.5, 0.99): keep opaque (uncertain to certain occupied)
-            # Could fade slightly, but user wants opaque, so keep at 1.0
-            actual_alpha = 1.0
+            # Occupied side: fade from opaque (prob=0.5) to translucent (prob=1.0)
+            # Linear: 1.0 at prob=0.5, 0.6 at prob=1.0
+            actual_alpha = 1.0 - 0.4 * (prob - 0.5) * 2.0
         
         return Rgba(r, g, b, actual_alpha)
     
@@ -885,6 +882,159 @@ class ObservationModel:
         
         return visible_indices
     
+    def generate_observations_from_depth(
+        self,
+        voxel_grid: VoxelGrid,
+        camera_pose: RigidTransform,
+        depth_image: np.ndarray,
+        surface_thickness: float = 0.03,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Generate observations for visible voxels using actual depth image.
+        
+        Instead of using a ground truth occupancy array, this method infers
+        whether each voxel is occupied or free based on the measured depth.
+        
+        A voxel is observed as OCCUPIED if the measured depth at its projected
+        pixel is approximately equal to the voxel's depth (± surface_thickness),
+        meaning the voxel is at or near the observed surface.
+        
+        A voxel is observed as FREE if the measured depth is significantly
+        greater than the voxel's depth, meaning the observed surface is
+        behind the voxel (the voxel is in empty space).
+        
+        Args:
+            voxel_grid: VoxelGrid instance
+            camera_pose: Camera pose X_WC
+            depth_image: (H, W) depth image in meters
+            surface_thickness: Depth tolerance for considering a voxel "at the surface".
+                              Should be roughly voxel_size or slightly larger.
+        
+        Returns:
+            Tuple of:
+            - visible_indices: (M, 3) array of observable voxel indices
+            - observations: (M,) boolean array (True = observed occupied)
+            - log_odds_updates: (M,) array of log-odds updates
+        """
+        # Ensure depth image is 2D
+        if depth_image.ndim == 3:
+            depth_image = depth_image.squeeze()
+        
+        # Get all voxels in frustum (occlusion check excludes voxels behind surfaces)
+        visible_indices, visible_centers, distances = self.get_visible_voxels_vectorized(
+            voxel_grid, camera_pose, depth_image
+        )
+        
+        if len(visible_indices) == 0:
+            return np.array([]).reshape(0, 3), np.array([]), np.array([])
+        
+        # Transform visible voxel centers to camera frame
+        points_cam = self.transform_points_to_camera_frame(visible_centers, camera_pose)
+        voxel_depths = points_cam[:, 2]  # Z coordinate in camera frame = depth
+        
+        # Project to image coordinates
+        pixel_coords, _ = self.project_to_image(points_cam)
+        
+        # Get pixel indices (round to nearest pixel)
+        u = np.round(pixel_coords[:, 0]).astype(int)
+        v = np.round(pixel_coords[:, 1]).astype(int)
+        
+        # Clamp to image bounds (should already be in bounds from frustum check)
+        u = np.clip(u, 0, self.image_width - 1)
+        v = np.clip(v, 0, self.image_height - 1)
+        
+        # Query measured depths at projected pixels
+        measured_depths = depth_image[v, u]
+        
+        # Handle invalid depth values (inf, nan, 0 = no return / too far)
+        valid_depth = np.isfinite(measured_depths) & (measured_depths > 0)
+        
+        # Initialize observations array (default to FREE)
+        observations = np.zeros(len(visible_indices), dtype=bool)
+        
+        # For voxels with valid depth measurements:
+        # OCCUPIED if voxel is AT the measured surface
+        # FREE if surface is BEHIND voxel (voxel is in empty space in front of the surface)
+        
+        # Depth difference: positive means surface is BEHIND voxel, negative means IN FRONT
+        # depth_diff = measured_depth - voxel_depth
+        #   depth_diff > 0: surface behind voxel (voxel in free space)
+        #   depth_diff ≈ 0: surface at voxel (voxel occupied)
+        #   depth_diff < 0: surface in front of voxel (voxel occluded/behind obstacle)
+        depth_diff = measured_depths - voxel_depths
+        
+        # ASYMMETRIC condition: only mark as occupied if surface is AT the voxel
+        # Allow small positive depth_diff for noise, but NOT if surface is significantly behind
+        # - depth_diff >= -surface_thickness: surface not too far in front (would mean voxel is behind obstacle)
+        # - depth_diff <= surface_thickness * 0.3: surface not significantly behind voxel
+        #   (if surface is behind, voxel is in free space looking at back wall/floor)
+        surface_at_voxel = (depth_diff >= -surface_thickness) & (depth_diff <= surface_thickness * 0.3)
+        
+        # Mark voxels at the surface as OCCUPIED
+        observations[valid_depth & surface_at_voxel] = True
+        
+        # Voxels with valid depth where surface is behind them (depth_diff > surface_thickness)
+        # are FREE - observations already initialized to False, so nothing to do
+        
+        # For invalid depth (no return), treat as FREE (no obstacle detected in that direction)
+        # observations already False, so nothing to do
+        
+        # Compute log-odds updates based on observations and distances
+        log_odds_updates = self.compute_log_odds_update(distances, observations)
+        
+        return visible_indices, observations, log_odds_updates
+
+    def update_voxel_grid_from_depth(
+        self,
+        voxel_grid: VoxelGrid,
+        camera_pose: RigidTransform,
+        depth_image: np.ndarray,
+        surface_thickness: float = 0.03,
+        l_min: float = -5.0,
+        l_max: float = 5.0,
+    ) -> Tuple[np.ndarray, int, int]:
+        """
+        Update voxel grid occupancy using actual depth image measurements.
+        
+        This is the realistic observation model that infers occupancy
+        from the depth image rather than using simulated ground truth.
+        
+        Args:
+            voxel_grid: VoxelGrid instance to update (modified in-place)
+            camera_pose: Camera pose X_WC
+            depth_image: (H, W) depth image in meters
+            surface_thickness: Depth tolerance for surface detection
+            l_min: Minimum log-odds clamp
+            l_max: Maximum log-odds clamp
+            
+        Returns:
+            Tuple of:
+            - visible_indices: (M, 3) array of updated voxel indices
+            - num_observed_occupied: Count of voxels observed as occupied
+            - num_observed_free: Count of voxels observed as free
+        """
+        visible_indices, observations, log_odds_updates = self.generate_observations_from_depth(
+            voxel_grid, camera_pose, depth_image, surface_thickness
+        )
+        
+        if len(visible_indices) == 0:
+            return visible_indices, 0, 0
+        
+        # Apply log-odds updates (vectorized)
+        idx = visible_indices.astype(int)
+        for n in range(len(idx)):
+            i, j, k = idx[n]
+            voxel_grid.log_odds[i, j, k] += log_odds_updates[n]
+            voxel_grid.log_odds[i, j, k] = np.clip(
+                voxel_grid.log_odds[i, j, k], l_min, l_max
+            )
+            voxel_grid.occupancy[i, j, k] = 1.0 / (1.0 + np.exp(-voxel_grid.log_odds[i, j, k]))
+        
+        num_occupied = int(np.sum(observations))
+        num_free = len(observations) - num_occupied
+        
+        return visible_indices, num_occupied, num_free
+
     def get_observation_stats(
         self,
         voxel_grid: VoxelGrid,
@@ -1297,11 +1447,15 @@ def main():
         print(f"  TPR range: [{obs_stats['min_tpr']:.1%}, {obs_stats['max_tpr']:.1%}]")
         print(f"  TNR range: [{obs_stats['min_tnr']:.1%}, {obs_stats['max_tnr']:.1%}]")
 
-    # ====== Ground Truth Configuration ======
-    # For this demo, assume all voxels are actually FREE (unoccupied)
-    # The observations should cause voxels to turn from red (unknown) to green (free)
-    nx, ny, nz = voxel_grid.dimensions
-    ground_truth_occupied = np.zeros((nx, ny, nz), dtype=bool)  # All free
+    # ====== Observation Configuration ======
+    # Using realistic depth-based observations: occupancy is inferred from
+    # the actual depth image, not from a simulated ground truth.
+    # Voxels at measured surfaces will be marked OCCUPIED (red, translucent)
+    # Voxels in front of surfaces will be marked FREE (transparent)
+    
+    # Surface thickness determines how close a voxel must be to the measured
+    # depth to be considered "at the surface" (occupied)
+    SURFACE_THICKNESS = voxel_grid.voxel_size * 1.5  # Slightly larger than voxel size
     
     print("\n" + "=" * 60)
     print("SCENARIO SETUP COMPLETE")
@@ -1311,25 +1465,28 @@ def main():
     print(f"  Light region center: {config.simulation.light_center}")
     print(f"  Light region size: {config.simulation.light_size}")
     print(f"  Voxel grid: {voxel_grid.dimensions} @ {voxel_grid.voxel_size}m resolution")
-    print(f"  Ground truth: All voxels are FREE (unoccupied)")
+    print(f"  Observation mode: DEPTH-BASED (realistic)")
+    print(f"  Surface thickness: {SURFACE_THICKNESS:.3f}m")
     print("=" * 60)
 
     print("\n✓ Visualization ready!")
     print("  Open http://localhost:7000 in your browser to view the scenario.")
     print("  The wrist camera is mounted on the robot's end-effector.")
     print("  Camera frustum is shown in light blue.")
-    print("  Voxel grid will update: red (unknown) -> green (observed free)")
+    print("  Voxel grid will update based on DEPTH measurements:")
+    print("    - Yellow (0.5) = unknown/uncertain")
+    print("    - Transparent = confident FREE (empty space)")
+    print("    - Translucent Red = confident OCCUPIED (surface detected)")
     print("\n" + "=" * 60)
-    print("STARTING OBSERVATION LOOP")
+    print("STARTING DEPTH-BASED OBSERVATION LOOP")
     print("=" * 60)
-    print("  Observations will update voxel beliefs over time...")
+    print("  Observations inferred from actual depth image...")
     print("  Press Ctrl+C to exit.\n")
 
     # ====== Dynamic Observation Loop ======
-    # Continuously observe and update voxel beliefs
+    # Continuously observe and update voxel beliefs using depth-based inference
     observation_count = 0
     update_interval = 0.1  # seconds between updates
-    use_noisy_observations = False  # Set to True for probabilistic noise
     
     # Get depth image output port from station
     depth_port = station.GetOutputPort("wrist_camera_sensor.depth_image")
@@ -1342,7 +1499,7 @@ def main():
             plant_sim_context = plant.GetMyContextFromRoot(context)
             X_WCamera = plant.EvalBodyPoseInWorld(plant_sim_context, camera_body)
             
-            # Get depth image from camera for occlusion checking
+            # Get depth image from camera
             depth_image_obj = depth_port.Eval(station_context)
             depth_image = np.array(depth_image_obj.data, copy=True)
             # Reshape to (H, W) if needed - Drake depth images are typically (H, W, 1)
@@ -1351,13 +1508,13 @@ def main():
             elif depth_image.ndim == 3:
                 depth_image = depth_image.squeeze()
             
-            # Update voxel grid based on observations (with occlusion checking)
-            visible_indices = obs_model.update_voxel_grid(
+            # Update voxel grid using DEPTH-BASED observations (realistic)
+            # Occupancy is inferred from the actual depth image, not ground truth
+            visible_indices, num_occ, num_free = obs_model.update_voxel_grid_from_depth(
                 voxel_grid,
                 X_WCamera,
                 depth_image=depth_image,
-                ground_truth_occupied=ground_truth_occupied,
-                use_perfect_observations=not use_noisy_observations,
+                surface_thickness=SURFACE_THICKNESS,
             )
             
             # Update visualization for observed voxels
@@ -1367,7 +1524,7 @@ def main():
                 voxel_grid.update_visualization(
                     meshcat=meshcat,
                     path_prefix="voxel_grid",
-                    alpha=0.3,  # Slightly more visible as beliefs update
+                    alpha=0.3,  # Base alpha (actual alpha computed by _prob_to_color)
                     voxels_to_update=voxels_to_update,
                 )
             
@@ -1377,14 +1534,13 @@ def main():
             if observation_count % 10 == 0:
                 # Compute statistics
                 mean_occupancy = np.mean(voxel_grid.occupancy)
-                min_occupancy = np.min(voxel_grid.occupancy)
-                max_occupancy = np.max(voxel_grid.occupancy)
                 num_confident_free = np.sum(voxel_grid.occupancy < 0.2)
-                num_unknown = np.sum((voxel_grid.occupancy >= 0.2) & (voxel_grid.occupancy <= 0.8))
+                num_confident_occupied = np.sum(voxel_grid.occupancy > 0.8)
+                num_unknown = voxel_grid.total_voxels - num_confident_free - num_confident_occupied
                 
-                print(f"[Obs #{observation_count:4d}] Visible: {len(visible_indices):3d} | "
-                      f"Occupancy: mean={mean_occupancy:.3f}, range=[{min_occupancy:.3f}, {max_occupancy:.3f}] | "
-                      f"Free(<0.2): {num_confident_free}/{voxel_grid.total_voxels}")
+                print(f"[Obs #{observation_count:4d}] Visible: {len(visible_indices):3d} "
+                      f"(occ={num_occ:2d}, free={num_free:3d}) | "
+                      f"Grid: free={num_confident_free}, occ={num_confident_occupied}, unk={num_unknown}")
             
             time.sleep(update_interval)
             
@@ -1394,8 +1550,9 @@ def main():
         print("=" * 60)
         print(f"  Total observations: {observation_count}")
         print(f"  Final mean occupancy: {np.mean(voxel_grid.occupancy):.4f}")
-        print(f"  Voxels confident free (P<0.2): {np.sum(voxel_grid.occupancy < 0.2)}/{voxel_grid.total_voxels}")
-        print(f"  Voxels confident occupied (P>0.8): {np.sum(voxel_grid.occupancy > 0.8)}/{voxel_grid.total_voxels}")
+        print(f"  Voxels confident FREE (P<0.2): {np.sum(voxel_grid.occupancy < 0.2)}/{voxel_grid.total_voxels}")
+        print(f"  Voxels confident OCCUPIED (P>0.8): {np.sum(voxel_grid.occupancy > 0.8)}/{voxel_grid.total_voxels}")
+        print(f"  Voxels uncertain (0.2≤P≤0.8): {np.sum((voxel_grid.occupancy >= 0.2) & (voxel_grid.occupancy <= 0.8))}/{voxel_grid.total_voxels}")
         print("=" * 60)
 
 

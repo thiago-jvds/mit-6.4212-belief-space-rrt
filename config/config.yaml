@@ -18,7 +18,7 @@ physics:
   safety_buffer_radius: 0.08
 
 planner:
-  max_iterations: 100
+  max_iterations: 10000
 
   # INITIAL BELIEF: We start knowing very little about the target.
   # Trace(Sigma) = 7.0 (High uncertainty)
@@ -35,6 +35,6 @@ planner:
   lambda_weight: 0.1
 
   # Biases
-  prob_sample_goal: 0.0
+  prob_sample_goal: 0.5
   prob_sample_light: 0.5
   q_light_hint: [ 0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028 ]

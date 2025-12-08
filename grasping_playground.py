@@ -36,9 +36,12 @@ from manipulation.icp import IterativeClosestPoint
 from manipulation.mustard_depth_camera_example import MustardPointCloud
 from manipulation.utils import ConfigureParser
 from pydrake.all import (
+    AbstractValue,
     AddMultibodyPlantSceneGraph,
+    Box,
     Concatenate,
     DiagramBuilder,
+    LeafSystem,
     MeshcatVisualizer,
     MeshcatVisualizerParams,
     Parser,
@@ -230,7 +233,7 @@ def segment_by_yellow(scene_pcl_np, scene_rgb_np):
     # Secondary mask: absolute values to filter out very dark/black points
     # But be more lenient - mustard can appear darker in shadows
     mask_brightness = (
-        (r + g + b) > 50       # Total brightness threshold
+        (r + g + b) > 85       # Total brightness threshold
     )
     
     # Combined mask
@@ -293,19 +296,140 @@ def get_mustard_bottle_model_pointcloud():
 
 
 # ============================================================================
+# ICP LEAF SYSTEM (based on MustardIterativeClosestPoint from pick_and_place_example.py)
+# ============================================================================
+
+class MustardIterativeClosestPoint(LeafSystem):
+    """
+    LeafSystem that takes 3 point clouds as input, segments yellow points,
+    and outputs an estimated pose for the mustard bottle using ICP.
+    
+    Unlike the original implementation which uses a fixed crop region,
+    this version uses yellow-based segmentation to dynamically find the object.
+    """
+    
+    def __init__(self, meshcat=None):
+        LeafSystem.__init__(self)
+        model_point_cloud = AbstractValue.Make(PointCloud(0))
+        self.DeclareAbstractInputPort("cloud0", model_point_cloud)
+        self.DeclareAbstractInputPort("cloud1", model_point_cloud)
+        self.DeclareAbstractInputPort("cloud2", model_point_cloud)
+
+        self.DeclareAbstractOutputPort(
+            "X_WO",
+            lambda: AbstractValue.Make(RigidTransform()),
+            self.EstimatePose,
+        )
+
+        self.mustard = MustardPointCloud()
+        self._meshcat = meshcat
+        if meshcat is not None:
+            meshcat.SetObject("icp_model", self.mustard)
+
+    def EstimatePose(self, context, output):
+        """
+        Estimate the pose of the mustard bottle using ICP.
+        
+        1. Concatenate point clouds from all cameras
+        2. Apply yellow segmentation to find mustard bottle points
+        3. Compute bounding box of yellow points for cropping
+        4. Run ICP to estimate pose
+        """
+        # Step 1: Get and concatenate all point clouds
+        pcd = []
+        for i in range(3):
+            cloud = self.get_input_port(i).Eval(context)
+            pcd.append(cloud)
+        
+        merged_pcd = Concatenate(pcd)
+        
+        # Step 2: Apply yellow segmentation
+        scene_xyzs = merged_pcd.xyzs()
+        scene_rgbs = merged_pcd.rgbs()
+        
+        segmented_xyz, segmented_rgb = segment_by_yellow(scene_xyzs, scene_rgbs)
+        
+        # Step 2b: Filter out points at or below bin floor level (removes depth bleeding artifacts)
+        min_z_threshold = 0.005  # Filter points below this Z height
+        above_floor_mask = segmented_xyz[2, :] > min_z_threshold
+        segmented_xyz = segmented_xyz[:, above_floor_mask]
+        segmented_rgb = segmented_rgb[:, above_floor_mask]
+        
+        if segmented_xyz.shape[1] < 10:
+            print("  ⚠ MustardICP: Not enough yellow points found!")
+            output.set_value(RigidTransform())
+            return
+        
+        # Step 3: Compute bounding box of yellow points with margin
+        margin = 0.05  # 5cm margin
+        lower_xyz = segmented_xyz.min(axis=1) - margin
+        upper_xyz = segmented_xyz.max(axis=1) + margin
+        
+        # Make sure we're above the ground plane
+        lower_xyz[2] = max(lower_xyz[2], 0.001)
+        
+        # Step 4: Crop merged point cloud to yellow region bounds
+        cropped_pcd = merged_pcd.Crop(lower_xyz=lower_xyz, upper_xyz=upper_xyz)
+        
+        # Downsample for efficiency
+        down_sampled_pcd = cropped_pcd.VoxelizedDownSample(voxel_size=0.005)
+        
+        if self._meshcat is not None:
+            self._meshcat.SetObject("icp_observations", down_sampled_pcd, point_size=0.001, rgba=Rgba(1, 0, 0, 1))
+        
+        # Step 5: Run ICP
+        # Compute initial guess from centroid of segmented points
+        centroid = np.mean(segmented_xyz, axis=1)
+        initial_guess = RigidTransform()
+        initial_guess.set_translation(centroid)
+        # Start with bottle lying on its side (common pose in bin)
+        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
+        
+        X_WOhat, chat = IterativeClosestPoint(
+            self.mustard.xyzs(),
+            down_sampled_pcd.xyzs(),
+            # scene_xyzs,
+            X_Ohat=initial_guess,
+            meshcat=self._meshcat,
+            meshcat_scene_path="icp_model",
+            max_iterations=100
+        )
+
+        output.set_value(X_WOhat)
+
+
+# ============================================================================
 # GRASP SELECTION FUNCTIONS
 # ============================================================================
 
 def make_internal_model():
     """
     Create an internal model for grasp planning/collision checking.
-    This contains just the gripper, cameras, and bins - no objects.
+    
+    NOTE: This model intentionally only includes a free-floating gripper and floor,
+    NOT the bins. This is because when grasping objects inside bins, the gripper
+    needs to reach inside the bin, and having bin collision geometry would cause
+    all grasp candidates to be rejected due to gripper-bin collisions.
+    
+    The collision checking against the point cloud (the object) is done separately.
     """
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
     parser = Parser(plant)
     ConfigureParser(parser)
-    parser.AddModelsFromUrl("package://manipulation/clutter_planning.dmd.yaml")
+    
+    # Only load the gripper (as a free body) and floor - NO bins
+    # This allows grasp planning to work inside bins without collision issues
+    parser.AddModelsFromUrl("package://manipulation/schunk_wsg_50_welded_fingers.sdf")
+    parser.AddModelsFromUrl("package://manipulation/floor.sdf")
+    
+    # Weld the floor to world
+    plant.WeldFrames(
+        plant.world_frame(), 
+        plant.GetFrameByName("box"),
+        RigidTransform([0, 0, -0.5])  # Floor at z=-0.5
+    )
+    
     plant.Finalize()
     return builder.Build()
 
@@ -717,6 +841,15 @@ def main():
             f"{camera_name}_point_cloud"
         )
 
+    # Add MustardIterativeClosestPoint system and wire to cameras 0, 1, 2
+    icp = builder.AddSystem(MustardIterativeClosestPoint(meshcat=meshcat))
+    builder.Connect(to_point_cloud["camera0"].get_output_port(), icp.get_input_port(0))
+    builder.Connect(to_point_cloud["camera1"].get_output_port(), icp.get_input_port(1))
+    builder.Connect(to_point_cloud["camera2"].get_output_port(), icp.get_input_port(2))
+    
+    # Export the ICP pose estimate
+    builder.ExportOutput(icp.GetOutputPort("X_WO"), "mustard_pose_estimate")
+
     # Build diagram and create simulator
     diagram = builder.Build()
     simulator = Simulator(diagram)
@@ -738,12 +871,38 @@ def main():
     
     # Generate random position and orientation for mustard bottle
     generator = RandomGenerator(rng.integers(1000))  # C++ random generator
-    random_rotation = UniformlyRandomRotationMatrix(generator)
+    # random_rotation = UniformlyRandomRotationMatrix(generator)
+    
+    # generate random value from 0 to 2pi for the rotation around the z
+    random_rotation = RollPitchYaw(0, 0, np.random.uniform(0, 2*np.pi)).ToRotationMatrix()
     
     # Random XY position within bin bounds, Z height above bin
-    random_x = rng.uniform(-0.1, 0.1)
-    random_y = rng.uniform(-0.1, 0.1)
+    x_offset = -0.01
+    x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
+    y_range = (-0.15, 0.15)  # min, max for y offset from bin center
     random_z = 0.25  # Height above bin
+    
+    random_x = rng.uniform(x_range[0], x_range[1])
+    random_y = rng.uniform(y_range[0], y_range[1])
+    
+    # Visualize the random initialization space as a translucent green box
+    box_width = x_range[1] - x_range[0]   # 0.2m
+    box_depth = y_range[1] - y_range[0]   # 0.2m
+    box_height = 0.02  # Thin box to show the XY region at the drop height
+    
+    init_space_box = Box(box_width, box_depth, box_height)
+    meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
+    
+    # Position the box at the center of the initialization region (relative to bin)
+    box_center_in_bin = [
+        (x_range[0] + x_range[1]) / 2,  # Center x = 0
+        (y_range[0] + y_range[1]) / 2,  # Center y = 0
+        random_z  # At drop height
+    ]
+    X_WBox = X_WB.multiply(RigidTransform(box_center_in_bin))
+    meshcat.SetTransform("init_space", X_WBox)
+    
+    print(f"  Initialization space: x=[{x_range[0]}, {x_range[1]}], y=[{y_range[0]}, {y_range[1]}], z={random_z}")
     
     # Create transform relative to bin, then convert to world frame
     X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
@@ -853,8 +1012,15 @@ def main():
     print("-" * 40)
     
     segmented_xyz, segmented_rgb = segment_by_yellow(scene_xyzs, scene_rgbs)
-    print(f"  Found {segmented_xyz.shape[1]} yellow points in fused cloud")
+    print(f"  Found {segmented_xyz.shape[1]} yellow points in fused cloud (before Z filter)")
     
+    # Filter out points at or below bin floor level (removes depth bleeding artifacts)
+    min_z_threshold = 0.005  # Filter points below this Z height
+    above_floor_mask = segmented_xyz[2, :] > min_z_threshold
+    segmented_xyz = segmented_xyz[:, above_floor_mask]
+    segmented_rgb = segmented_rgb[:, above_floor_mask]
+    print(f"  After Z filter (z > {min_z_threshold}): {segmented_xyz.shape[1]} yellow points")
+
     # Plot segmentation results for cameras
     print("\n" + "-" * 40)
     print("Plotting segmentation results...")
@@ -878,67 +1044,54 @@ def main():
             rgba=Rgba(0, 1, 0, 1)  # Green
         )
         
-        # # Generate model point cloud
-        # print("\n" + "-" * 40)
-        # print("Phase 4: Running ICP pose estimation...")
-        # print("-" * 40)
+        # Get ICP pose estimate from MustardIterativeClosestPoint system
+        print("\n" + "-" * 40)
+        print("Phase 4: Running ICP pose estimation (via MustardIterativeClosestPoint system)...")
+        print("-" * 40)
         
-        # model_pcl = get_mustard_bottle_model_pointcloud()
-        # print(f"  Model has {model_pcl.shape[1]} points (from actual mesh)")
+        model_pcl = get_mustard_bottle_model_pointcloud()
+        print(f"  Model has {model_pcl.shape[1]} points (from actual mesh)")
         
-        # # Visualize model point cloud at origin (blue)
-        # meshcat.SetObject(
-        #     "pcl_model_origin",
-        #     ToPointCloud(model_pcl),
-        #     rgba=Rgba(0, 0, 1, 0.5)  # Blue, semi-transparent
-        # )
+        # Visualize model point cloud at origin (blue)
+        meshcat.SetObject(
+            "pcl_model_origin",
+            ToPointCloud(model_pcl),
+            rgba=Rgba(0, 0, 1, 0.5)  # Blue, semi-transparent
+        )
         
-        # # Initial guess: center of segmented points, with some reasonable orientation
-        # # The bottle is lying on its side in the bin
-        # centroid = np.mean(segmented_xyz, axis=1)
-        # initial_guess = RigidTransform()
-        # initial_guess.set_translation(centroid)
-        # # Start with bottle lying on its side (rotated 90 deg about X)
-        # initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
-        
-        # print(f"  Initial guess centroid: {centroid}")
-        
-        # Run ICP
+        # Get ICP result from the system (uses yellow segmentation internally)
         try:
-            # X_WM_estimated, correspondences = IterativeClosestPoint(
-            #     p_Om=model_pcl,
-            #     p_Ws=segmented_xyz,
-            #     X_Ohat=initial_guess,
-            #     meshcat=meshcat,
-            #     meshcat_scene_path="icp_iterations",
-            #     max_iterations=100,
-            # )
+            X_WM_estimated = diagram.GetOutputPort("mustard_pose_estimate").Eval(context)
             
-            # print(f"  ✓ ICP converged!")
-            # print(f"    Estimated position: {X_WM_estimated.translation()}")
-            # rpy = RollPitchYaw(X_WM_estimated.rotation())
-            # print(f"    Estimated RPY: [{rpy.roll_angle():.3f}, {rpy.pitch_angle():.3f}, {rpy.yaw_angle():.3f}]")
+            # Check if we got a valid pose (not identity)
+            if np.allclose(X_WM_estimated.translation(), [0, 0, 0]):
+                print("  ⚠ ICP system returned identity pose - may have failed")
+            else:
+                print(f"  ✓ ICP converged!")
+                print(f"    Estimated position: {X_WM_estimated.translation()}")
+                rpy = RollPitchYaw(X_WM_estimated.rotation())
+                print(f"    Estimated RPY: [{rpy.roll_angle():.3f}, {rpy.pitch_angle():.3f}, {rpy.yaw_angle():.3f}]")
             
-            # # Visualize the estimated model pose (magenta)
-            # meshcat.SetObject(
-            #     "pcl_estimated",
-            #     ToPointCloud(model_pcl),
-            #     rgba=Rgba(1, 0, 1, 1)  # Magenta
-            # )
-            # meshcat.SetTransform("pcl_estimated", X_WM_estimated)
+            # Visualize the estimated model pose (magenta)
+            meshcat.SetObject(
+                "pcl_estimated",
+                ToPointCloud(model_pcl),
+                rgba=Rgba(1, 0, 1, 1)  # Magenta
+            )
+            meshcat.SetTransform("pcl_estimated", X_WM_estimated)
             
-            # # Get ground truth pose from simulation
-            # plant_context = plant.GetMyContextFromRoot(context)
-            # mustard_body = plant.GetBodyByName("base_link_mustard")
-            # X_WM_true = plant.EvalBodyPoseInWorld(plant_context, mustard_body)
+            # Get ground truth pose from simulation
+            plant_context = plant.GetMyContextFromRoot(context)
+            mustard_body = plant.GetBodyByName("base_link_mustard")
+            X_WM_true = plant.EvalBodyPoseInWorld(plant_context, mustard_body)
             
-            # print(f"\n  Ground truth position: {X_WM_true.translation()}")
-            # rpy_true = RollPitchYaw(X_WM_true.rotation())
-            # print(f"  Ground truth RPY: [{rpy_true.roll_angle():.3f}, {rpy_true.pitch_angle():.3f}, {rpy_true.yaw_angle():.3f}]")
+            print(f"\n  Ground truth position: {X_WM_true.translation()}")
+            rpy_true = RollPitchYaw(X_WM_true.rotation())
+            print(f"  Ground truth RPY: [{rpy_true.roll_angle():.3f}, {rpy_true.pitch_angle():.3f}, {rpy_true.yaw_angle():.3f}]")
             
-            # # Compute error
-            # pos_error = np.linalg.norm(X_WM_estimated.translation() - X_WM_true.translation())
-            # print(f"\n  Position error: {pos_error*1000:.1f} mm")
+            # Compute error
+            pos_error = np.linalg.norm(X_WM_estimated.translation() - X_WM_true.translation())
+            print(f"\n  Position error: {pos_error*1000:.1f} mm")
             
             # ========== GRASP SELECTION ==========
             print("\n" + "-" * 40)
@@ -946,8 +1099,8 @@ def main():
             print("-" * 40)
             
             # Transform model point cloud to estimated world pose
-            # model_world_xyz = X_WM_estimated @ model_pcl
-            model_world_xyz = segmented_xyz
+            model_world_xyz = X_WM_estimated @ model_pcl
+            # model_world_xyz = segmented_xyz
             
             # Create a Drake PointCloud with the transformed model
             grasp_cloud = PointCloud(model_world_xyz.shape[1], Fields(BaseField.kXYZs | BaseField.kNormals))
@@ -966,7 +1119,7 @@ def main():
             meshcat.SetObject("pcl_grasp_cloud", grasp_cloud, point_size=0.003, rgba=Rgba(0, 1, 1, 1))
             
             # Select best grasp (with debug=True to see rejection reasons)
-            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=250, num_to_draw=1, debug=True)
+            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=1000, num_to_draw=1, debug=True)
             
             if best_X_G is not None:
                 print(f"\n  ✓ Best grasp found!")
@@ -1024,7 +1177,7 @@ def main():
                 print("\n  ✗ No valid grasp found")
             
         except Exception as e:
-            print(f"  ✗ ICP failed: {e}")
+            print(f"  ✗ ICP system failed: {e}")
             import traceback
             traceback.print_exc()
     else:
@@ -1033,6 +1186,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("Visualization Guide:")
+    print("  - init_space: Green translucent box showing random init region")
     print("  - pcl_camera0_raw: Raw point cloud from camera0")
     print("  - pcl_camera1_raw: Raw point cloud from camera1")
     print("  - pcl_camera2_raw: Raw point cloud from camera2")

@@ -3,9 +3,9 @@
 Grasping Playground - Simulation with point cloud segmentation and ICP.
 
 Sets up:
-- Kuka iiwa robot with wrist camera
-- WSG gripper
-- Bin with mustard bottle
+- Kuka iiwa robot with WSG gripper
+- Two bins with fixed cameras (from manipulation package)
+- Mustard bottle randomly positioned above bin0
 - Point cloud capture, yellow segmentation, and ICP pose estimation
 
 Usage:
@@ -33,8 +33,14 @@ from pathlib import Path
 from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
 from manipulation.icp import IterativeClosestPoint
 from manipulation.mustard_depth_camera_example import MustardPointCloud
+from manipulation.utils import ConfigureParser
 from pydrake.all import (
+    AddMultibodyPlantSceneGraph,
+    Concatenate,
     DiagramBuilder,
+    MeshcatVisualizer,
+    MeshcatVisualizerParams,
+    Parser,
     Simulator,
     Meshcat,
     MeshcatParams,
@@ -46,8 +52,8 @@ from pydrake.all import (
     RigidTransform,
     RotationMatrix,
     RollPitchYaw,
-    Parser,
-    AddMultibodyPlantSceneGraph,
+    RandomGenerator,
+    UniformlyRandomRotationMatrix,
 )
 
 
@@ -285,11 +291,371 @@ def get_mustard_bottle_model_pointcloud():
     return model_pcl_np
 
 
+# ============================================================================
+# GRASP SELECTION FUNCTIONS
+# ============================================================================
+
+def make_internal_model():
+    """
+    Create an internal model for grasp planning/collision checking.
+    This contains just the gripper, cameras, and bins - no objects.
+    """
+    builder = DiagramBuilder()
+    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
+    parser = Parser(plant)
+    ConfigureParser(parser)
+    parser.AddModelsFromUrl("package://manipulation/clutter_planning.dmd.yaml")
+    plant.Finalize()
+    return builder.Build()
+
+
+def draw_grasp_candidate(meshcat, X_G, prefix="gripper", draw_frames=True):
+    """
+    Draw a gripper at the given pose in Meshcat.
+    
+    Args:
+        meshcat: The Meshcat instance
+        X_G: RigidTransform for the gripper pose
+        prefix: Meshcat path prefix for the visualization
+        draw_frames: Whether to draw coordinate frames (not used currently)
+    """
+    builder = DiagramBuilder()
+    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
+    parser = Parser(plant)
+    ConfigureParser(parser)
+    parser.AddModelsFromUrl("package://manipulation/schunk_wsg_50_welded_fingers.sdf")
+    plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("body"), X_G)
+    plant.Finalize()
+
+    params = MeshcatVisualizerParams()
+    params.prefix = prefix
+    params.delete_prefix_on_initialization_event = False
+    MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat, params)
+    diagram = builder.Build()
+    context = diagram.CreateDefaultContext()
+    diagram.ForcedPublish(context)
+
+
+def GraspCandidateCost(
+    diagram,
+    context,
+    cloud,
+    wsg_body_index=None,
+    plant_system_name="plant",
+    scene_graph_system_name="scene_graph",
+    adjust_X_G=False,
+    verbose=False,
+):
+    """
+    Compute the cost of a grasp candidate.
+    
+    Args:
+        diagram: A diagram containing a MultibodyPlant+SceneGraph with a free gripper
+        context: The diagram context
+        cloud: A PointCloud representing the object to grasp
+        wsg_body_index: The body index of the gripper
+        adjust_X_G: If True, adjust gripper position to center on grasped points
+        verbose: Print debug info
+    
+    Returns:
+        cost: The grasp cost (lower is better, inf if invalid)
+    """
+    plant = diagram.GetSubsystemByName(plant_system_name)
+    plant_context = plant.GetMyMutableContextFromRoot(context)
+    scene_graph = diagram.GetSubsystemByName(scene_graph_system_name)
+    scene_graph_context = scene_graph.GetMyMutableContextFromRoot(context)
+    
+    if wsg_body_index:
+        wsg = plant.get_body(wsg_body_index)
+    else:
+        wsg = plant.GetBodyByName("body")
+        wsg_body_index = wsg.index()
+
+    X_G = plant.GetFreeBodyPose(plant_context, wsg)
+
+    # Transform cloud into gripper frame
+    X_GW = X_G.inverse()
+    p_GC = X_GW @ cloud.xyzs()
+
+    # Crop to a region inside of the finger box
+    crop_min = [-0.05, 0.1, -0.00625]
+    crop_max = [0.05, 0.1125, 0.00625]
+    indices = np.all(
+        (
+            crop_min[0] <= p_GC[0, :],
+            p_GC[0, :] <= crop_max[0],
+            crop_min[1] <= p_GC[1, :],
+            p_GC[1, :] <= crop_max[1],
+            crop_min[2] <= p_GC[2, :],
+            p_GC[2, :] <= crop_max[2],
+        ),
+        axis=0,
+    )
+
+    if adjust_X_G and np.sum(indices) > 0:
+        p_GC_x = p_GC[0, indices]
+        p_Gcenter_x = (p_GC_x.min() + p_GC_x.max()) / 2.0
+        X_G.set_translation(X_G @ np.array([p_Gcenter_x, 0, 0]))
+        plant.SetFreeBodyPose(plant_context, wsg, X_G)
+        X_GW = X_G.inverse()
+
+    query_object = scene_graph.get_query_output_port().Eval(scene_graph_context)
+
+    # Check collisions between the gripper and the environment
+    if query_object.HasCollisions():
+        if verbose:
+            print("Gripper is colliding with environment!")
+        return np.inf
+
+    # Check collisions between the gripper and the point cloud
+    margin = 0.0
+    for i in range(cloud.size()):
+        distances = query_object.ComputeSignedDistanceToPoint(
+            cloud.xyz(i), threshold=margin
+        )
+        if distances:
+            if verbose:
+                print("Gripper is colliding with point cloud!")
+            return np.inf
+
+    # Need normals for cost computation
+    if not cloud.has_normals():
+        return 0.0  # Can't compute orientation cost without normals
+    
+    n_GC = X_GW.rotation().multiply(cloud.normals()[:, indices])
+
+    # Penalize deviation of the gripper from vertical
+    cost = 20.0 * X_G.rotation().matrix()[2, 1]
+
+    # Reward sum |dot product of normals with gripper x|^2
+    if n_GC.shape[1] > 0:
+        cost -= np.sum(n_GC[0, :] ** 2)
+    
+    if verbose:
+        print(f"cost: {cost}")
+    return cost
+
+
+def GenerateAntipodalGraspCandidate(
+    diagram,
+    context,
+    cloud,
+    rng,
+    wsg_body_index=None,
+    plant_system_name="plant",
+    scene_graph_system_name="scene_graph",
+):
+    """
+    Generate an antipodal grasp candidate by picking a random point and aligning
+    the gripper with its normal.
+    """
+    cost, X_G, _ = GenerateAntipodalGraspCandidateDebug(
+        diagram, context, cloud, rng, wsg_body_index, 
+        plant_system_name, scene_graph_system_name, verbose=False
+    )
+    return cost, X_G
+
+
+def GenerateAntipodalGraspCandidateDebug(
+    diagram,
+    context,
+    cloud,
+    rng,
+    wsg_body_index=None,
+    plant_system_name="plant",
+    scene_graph_system_name="scene_graph",
+    verbose=False,
+):
+    """
+    Generate an antipodal grasp candidate with debug info.
+    
+    Returns:
+        cost: The grasp cost
+        X_G: The grasp pose (RigidTransform), or None if no valid grasp found
+        reject_reason: String describing why grasp was rejected, or None if valid
+    """
+    plant = diagram.GetSubsystemByName(plant_system_name)
+    plant_context = plant.GetMyMutableContextFromRoot(context)
+    scene_graph = diagram.GetSubsystemByName(scene_graph_system_name)
+    scene_graph_context = scene_graph.GetMyMutableContextFromRoot(context)
+    
+    if wsg_body_index:
+        wsg = plant.get_body(wsg_body_index)
+    else:
+        wsg = plant.GetBodyByName("body")
+        wsg_body_index = wsg.index()
+
+    if cloud.size() < 2:
+        return np.inf, None, "empty_cloud"
+        
+    index = rng.integers(0, cloud.size() - 1)
+
+    # Use S for sample point/frame
+    p_WS = cloud.xyz(index)
+    n_WS = cloud.normal(index)
+
+    norm = np.linalg.norm(n_WS)
+    if not np.isclose(norm, 1.0):
+        if norm < 1e-6:
+            return np.inf, None, "zero_normal"
+        n_WS = n_WS / norm
+
+    if verbose:
+        print(f"    DEBUG: Point {index}, pos={p_WS}, normal={n_WS}")
+
+    Gx = n_WS  # gripper x axis aligns with normal
+    # make orthonormal y axis, aligned with world down
+    y = np.array([0.0, 0.0, -1.0])
+    dot_y_gx = np.dot(y, Gx)
+    
+    if verbose:
+        print(f"    DEBUG: dot(y, Gx) = {dot_y_gx:.4f}")
+    
+    if np.abs(dot_y_gx) > 0.999:
+        # normal was pointing straight down/up, reject this sample
+        return np.inf, None, "normal_down"
+
+    Gy = y - dot_y_gx * Gx
+    Gy = Gy / np.linalg.norm(Gy)
+    Gz = np.cross(Gx, Gy)
+    R_WG = RotationMatrix(np.vstack((Gx, Gy, Gz)).T)
+    p_GS_G = [0.054 - 0.01, 0.10625, 0]
+
+    # Try orientations from the center out
+    min_roll = -np.pi / 3.0
+    max_roll = np.pi / 3.0
+    alpha = np.array([0.5, 0.65, 0.35, 0.8, 0.2, 1.0, 0.0])
+    
+    collision_count = 0
+    for theta in min_roll + (max_roll - min_roll) * alpha:
+        # Rotate the object in the hand by a random rotation (around the normal)
+        R_WG2 = R_WG.multiply(RotationMatrix.MakeXRotation(theta))
+
+        # Use G for gripper frame
+        p_SG_W = -R_WG2.multiply(p_GS_G)
+        p_WG = p_WS + p_SG_W
+
+        X_G = RigidTransform(R_WG2, p_WG)
+        plant.SetFreeBodyPose(plant_context, wsg, X_G)
+        
+        # Check collisions to determine reason
+        query_object = scene_graph.get_query_output_port().Eval(scene_graph_context)
+        if query_object.HasCollisions():
+            collision_count += 1
+            if verbose:
+                print(f"    DEBUG: theta={theta:.2f}, collision with environment")
+            continue
+        
+        cost = GraspCandidateCost(diagram, context, cloud, adjust_X_G=True, verbose=verbose)
+        X_G = plant.GetFreeBodyPose(plant_context, wsg)
+        if np.isfinite(cost):
+            return cost, X_G, None
+    
+    # All orientations failed
+    if collision_count == len(alpha):
+        return np.inf, None, "collision_env"
+    else:
+        return np.inf, None, "collision_cloud"
+
+
+def select_best_grasp(meshcat, cloud, rng, num_candidates=100, debug=False):
+    """
+    Sample grasp candidates and select the best one.
+    
+    Args:
+        meshcat: Meshcat instance for visualization
+        cloud: PointCloud with normals (the object point cloud in world frame)
+        rng: numpy random generator
+        num_candidates: Number of grasp candidates to sample
+        debug: If True, print debug info for first few candidates
+    
+    Returns:
+        best_X_G: The best grasp pose, or None if no valid grasp found
+        best_cost: The cost of the best grasp
+    """
+    print(f"\n  Sampling {num_candidates} grasp candidates...")
+    
+    # Debug: check normals
+    if debug and cloud.has_normals():
+        normals = cloud.normals()
+        print(f"  DEBUG: Cloud has {cloud.size()} points with normals")
+        # Check how many normals are pointing roughly up vs sideways
+        z_component = np.abs(normals[2, :])
+        up_count = np.sum(z_component > 0.9)
+        side_count = np.sum(z_component < 0.3)
+        print(f"  DEBUG: Normals pointing up (|z|>0.9): {up_count}")
+        print(f"  DEBUG: Normals pointing sideways (|z|<0.3): {side_count}")
+    
+    # Create internal model for collision checking
+    internal_model = make_internal_model()
+    internal_model_context = internal_model.CreateDefaultContext()
+    
+    costs = []
+    X_Gs = []
+    
+    # Debug counters
+    reject_normal_down = 0
+    reject_collision_env = 0
+    reject_collision_cloud = 0
+    reject_other = 0
+    
+    for i in range(num_candidates):
+        cost, X_G, reject_reason = GenerateAntipodalGraspCandidateDebug(
+            internal_model, internal_model_context, cloud, rng,
+            verbose=(debug and i < 5)  # Verbose for first 5 candidates
+        )
+        if np.isfinite(cost):
+            costs.append(cost)
+            X_Gs.append(X_G)
+        else:
+            if reject_reason == "normal_down":
+                reject_normal_down += 1
+            elif reject_reason == "collision_env":
+                reject_collision_env += 1
+            elif reject_reason == "collision_cloud":
+                reject_collision_cloud += 1
+            else:
+                reject_other += 1
+        
+        # Progress update every 20 candidates
+        if (i + 1) % 20 == 0:
+            print(f"    Processed {i+1}/{num_candidates}, found {len(costs)} valid grasps")
+    
+    # Print rejection summary
+    print(f"\n  Rejection summary:")
+    print(f"    Normal pointing down: {reject_normal_down}")
+    print(f"    Collision with environment: {reject_collision_env}")
+    print(f"    Collision with point cloud: {reject_collision_cloud}")
+    print(f"    Other/no valid orientation: {reject_other}")
+    
+    if len(costs) == 0:
+        print("  ✗ No valid grasp candidates found!")
+        return None, np.inf
+    
+    # Sort by cost and get best candidates
+    indices = np.asarray(costs).argsort()
+    
+    # Draw top 5 grasps (or fewer if we have less)
+    num_to_draw = min(5, len(indices))
+    print(f"\n  Drawing top {num_to_draw} grasp candidates:")
+    
+    for rank in range(num_to_draw):
+        idx = indices[rank]
+        print(f"    {rank+1}. Cost: {costs[idx]:.3f}")
+        draw_grasp_candidate(meshcat, X_Gs[idx], prefix=f"grasp_{rank+1}_best")
+    
+    best_idx = indices[0]
+    return X_Gs[best_idx], costs[best_idx]
+
+
 def main():
     print("=" * 60)
     print("Grasping Playground")
-    print("Point Cloud Segmentation & ICP Pose Estimation")
+    print("Two Bins with Cameras + Mustard Bottle ICP")
     print("=" * 60)
+
+    # Random seed for reproducible results (change for different runs)
+    rng = np.random.default_rng(seed=None)  # None = random seed each run
 
     # Start Meshcat
     try:
@@ -333,7 +699,8 @@ def main():
         station.GetInputPort("wsg.position")
     )
 
-    # Add point cloud generation from camera
+    # Add point cloud generation from cameras
+    # The cameras (camera0, camera1, camera2) are defined in two_bins_w_cameras.dmd.yaml
     to_point_cloud = AddPointClouds(
         scenario=scenario,
         station=station,
@@ -341,35 +708,57 @@ def main():
         meshcat=meshcat,
     )
     
-    # Export both camera point cloud outputs
-    if isinstance(to_point_cloud, dict):
+    # Export point cloud output ports
+    # to_point_cloud is a dict mapping camera name -> DepthImageToPointCloud system
+    for camera_name, converter in to_point_cloud.items():
         builder.ExportOutput(
-            to_point_cloud["left_wrist_camera_sensor"].get_output_port(),
-            "left_camera_point_cloud"
+            converter.get_output_port(),
+            f"{camera_name}_point_cloud"
         )
-        builder.ExportOutput(
-            to_point_cloud["right_wrist_camera_sensor"].get_output_port(),
-            "right_camera_point_cloud"
-        )
-    else:
-        # Fallback for list format
-        builder.ExportOutput(
-            to_point_cloud[0].get_output_port(),
-            "left_camera_point_cloud"
-        )
-        if len(to_point_cloud) > 1:
-            builder.ExportOutput(
-                to_point_cloud[1].get_output_port(),
-                "right_camera_point_cloud"
-            )
 
     # Build diagram and create simulator
     diagram = builder.Build()
     simulator = Simulator(diagram)
     simulator.set_target_realtime_rate(1.0)
 
+    # Get context and plant context
+    context = simulator.get_mutable_context()
+    plant_context = plant.GetMyMutableContextFromRoot(context)
+
+    # ========== Randomize mustard bottle position above bin0 ==========
     print("\n" + "-" * 40)
-    print("Phase 1: Letting mustard bottle fall into bin...")
+    print("Phase 0: Randomizing mustard bottle position above bin0...")
+    print("-" * 40)
+    
+    # Get bin0's pose in world frame
+    bin0_instance = plant.GetModelInstanceByName("bin0")
+    bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
+    X_WB = plant.EvalBodyPoseInWorld(plant_context, bin0_body)
+    
+    # Generate random position and orientation for mustard bottle
+    generator = RandomGenerator(rng.integers(1000))  # C++ random generator
+    random_rotation = UniformlyRandomRotationMatrix(generator)
+    
+    # Random XY position within bin bounds, Z height above bin
+    random_x = rng.uniform(-0.15, 0.15)
+    random_y = rng.uniform(-0.2, 0.2)
+    random_z = 0.25  # Height above bin
+    
+    # Create transform relative to bin, then convert to world frame
+    X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
+    X_WM = X_WB.multiply(X_BM)
+    
+    # Set mustard bottle pose
+    mustard_body = plant.GetBodyByName("base_link_mustard")
+    plant.SetFreeBodyPose(plant_context, mustard_body, X_WM)
+    
+    print(f"  Bin0 position: {X_WB.translation()}")
+    print(f"  Mustard random offset: [{random_x:.3f}, {random_y:.3f}, {random_z:.3f}]")
+    print(f"  Mustard world position: {X_WM.translation()}")
+
+    # ========== Let bottle fall and settle ==========
+    print("\n" + "-" * 40)
+    print("Phase 1: Letting mustard bottle fall into bin0...")
     print("-" * 40)
 
     # Let the mustard bottle fall and settle
@@ -382,96 +771,80 @@ def main():
     
     # Capture the point cloud
     print("\n" + "-" * 40)
-    print("Phase 2: Capturing point cloud from wrist camera...")
+    print("Phase 2: Capturing point clouds from fixed cameras...")
     print("-" * 40)
     
     # Force publish to update visualization
     diagram.ForcedPublish(context)
     
-    # Get the point clouds from both cameras
-    left_pcl_drake = (
-        diagram.GetOutputPort("left_camera_point_cloud")
-        .Eval(context)
-        .Crop(lower_xyz=[-2, -2, -2], upper_xyz=[2, 2, 2])
-    )
-    right_pcl_drake = (
-        diagram.GetOutputPort("right_camera_point_cloud")
-        .Eval(context)
-        .Crop(lower_xyz=[-2, -2, -2], upper_xyz=[2, 2, 2])
-    )
+    # Camera names from two_bins_w_cameras.dmd.yaml
+    camera_names = ["camera0", "camera1", "camera2"]
     
-    print(f"  Left camera: {left_pcl_drake.xyzs().shape[1]} points")
-    print(f"  Right camera: {right_pcl_drake.xyzs().shape[1]} points")
+    # Get point clouds from all 3 cameras
+    point_clouds = []
+    for cam_name in camera_names:
+        try:
+            pcl = (
+                diagram.GetOutputPort(f"{cam_name}_point_cloud")
+                .Eval(context)
+                .Crop(lower_xyz=[-2, -2, -2], upper_xyz=[2, 2, 2])
+            )
+            point_clouds.append(pcl)
+            print(f"  {cam_name}: {pcl.xyzs().shape[1]} points")
+            
+            # Visualize each camera's raw point cloud
+            meshcat.SetObject(f"pcl_{cam_name}_raw", pcl)
+        except Exception as e:
+            print(f"  ⚠ Could not get {cam_name} point cloud: {e}")
     
-    # Visualize both raw point clouds in meshcat
-    meshcat.SetObject("pcl_left_raw", left_pcl_drake)
-    meshcat.SetObject("pcl_right_raw", right_pcl_drake)
-    
-    # Fuse both point clouds together
-    left_xyzs = left_pcl_drake.xyzs()
-    left_rgbs = left_pcl_drake.rgbs()
-    right_xyzs = right_pcl_drake.xyzs()
-    right_rgbs = right_pcl_drake.rgbs()
-    
-    # Concatenate point clouds
-    scene_xyzs = np.hstack([left_xyzs, right_xyzs])
-    scene_rgbs = np.hstack([left_rgbs, right_rgbs])
-    
-    print(f"  Fused point cloud: {scene_xyzs.shape[1]} points")
-    
-    # Visualize fused point cloud
-    fused_pcl = ToPointCloud(scene_xyzs, scene_rgbs)
-    meshcat.SetObject("pcl_fused_raw", fused_pcl)
-    
-    # Get RGB and depth images from BOTH cameras for visualization
-    print("\n  Getting RGB and depth images from both cameras...")
-    station_context = station.GetMyContextFromRoot(context)
-    
-    # Left camera images
-    left_rgb_image = None
-    left_depth_image = None
-    left_yellow_mask = None
-    try:
-        left_rgb_obj = station.GetOutputPort("left_wrist_camera_sensor.rgb_image").Eval(station_context)
-        left_depth_obj = station.GetOutputPort("left_wrist_camera_sensor.depth_image").Eval(station_context)
+    # Fuse all point clouds using Drake's Concatenate
+    if len(point_clouds) > 0:
+        fused_pcl = Concatenate(point_clouds)
+        print(f"  Fused point cloud: {fused_pcl.xyzs().shape[1]} points")
         
-        left_rgb_image = np.array(left_rgb_obj.data, copy=True)
-        left_depth_image = np.array(left_depth_obj.data, copy=True)
+        # Visualize fused point cloud
+        meshcat.SetObject("pcl_fused_raw", fused_pcl)
         
-        if left_rgb_image.ndim == 1:
-            left_rgb_image = left_rgb_image.reshape(left_rgb_obj.height(), left_rgb_obj.width(), -1)
-        if left_depth_image.ndim == 1:
-            left_depth_image = left_depth_image.reshape(left_depth_obj.height(), left_depth_obj.width())
-        elif left_depth_image.ndim == 3:
-            left_depth_image = left_depth_image.squeeze()
-        
-        left_yellow_mask = create_yellow_mask_from_rgb(left_rgb_image)
-        print(f"  Left camera - RGB: {left_rgb_image.shape}, Yellow: {np.sum(left_yellow_mask)} pixels")
-    except Exception as e:
-        print(f"  ⚠ Could not get left camera images: {e}")
+        scene_xyzs = fused_pcl.xyzs()
+        scene_rgbs = fused_pcl.rgbs()
+    else:
+        print("  ⚠ No point clouds captured!")
+        scene_xyzs = np.array([[], [], []])
+        scene_rgbs = np.array([[], [], []])
     
-    # Right camera images
-    right_rgb_image = None
-    right_depth_image = None
-    right_yellow_mask = None
-    try:
-        right_rgb_obj = station.GetOutputPort("right_wrist_camera_sensor.rgb_image").Eval(station_context)
-        right_depth_obj = station.GetOutputPort("right_wrist_camera_sensor.depth_image").Eval(station_context)
-        
-        right_rgb_image = np.array(right_rgb_obj.data, copy=True)
-        right_depth_image = np.array(right_depth_obj.data, copy=True)
-        
-        if right_rgb_image.ndim == 1:
-            right_rgb_image = right_rgb_image.reshape(right_rgb_obj.height(), right_rgb_obj.width(), -1)
-        if right_depth_image.ndim == 1:
-            right_depth_image = right_depth_image.reshape(right_depth_obj.height(), right_depth_obj.width())
-        elif right_depth_image.ndim == 3:
-            right_depth_image = right_depth_image.squeeze()
-        
-        right_yellow_mask = create_yellow_mask_from_rgb(right_rgb_image)
-        print(f"  Right camera - RGB: {right_rgb_image.shape}, Yellow: {np.sum(right_yellow_mask)} pixels")
-    except Exception as e:
-        print(f"  ⚠ Could not get right camera images: {e}")
+    # Get RGB and depth images from cameras for visualization
+    print("\n  Getting RGB and depth images from cameras...")
+    
+    # Store images from first two cameras for visualization
+    camera_images = {}
+    for i, cam_name in enumerate(camera_names[:2]):  # Just first 2 cameras for plots
+        try:
+            rgb_port = diagram.GetOutputPort(f"{cam_name}.rgb_image")
+            depth_port = diagram.GetOutputPort(f"{cam_name}.depth_image")
+            
+            rgb_obj = rgb_port.Eval(context)
+            depth_obj = depth_port.Eval(context)
+            
+            rgb_image = np.array(rgb_obj.data, copy=True)
+            depth_image = np.array(depth_obj.data, copy=True)
+            
+            if rgb_image.ndim == 1:
+                rgb_image = rgb_image.reshape(rgb_obj.height(), rgb_obj.width(), -1)
+            if depth_image.ndim == 1:
+                depth_image = depth_image.reshape(depth_obj.height(), depth_obj.width())
+            elif depth_image.ndim == 3:
+                depth_image = depth_image.squeeze()
+            
+            yellow_mask = create_yellow_mask_from_rgb(rgb_image)
+            
+            camera_images[cam_name] = {
+                'rgb': rgb_image,
+                'depth': depth_image,
+                'mask': yellow_mask
+            }
+            print(f"  {cam_name} - RGB: {rgb_image.shape}, Yellow: {np.sum(yellow_mask)} pixels")
+        except Exception as e:
+            print(f"  ⚠ Could not get {cam_name} images: {e}")
     
     # Segment by yellow color on the FUSED point cloud
     print("\n" + "-" * 40)
@@ -481,24 +854,20 @@ def main():
     segmented_xyz, segmented_rgb = segment_by_yellow(scene_xyzs, scene_rgbs)
     print(f"  Found {segmented_xyz.shape[1]} yellow points in fused cloud")
     
-    # Plot segmentation results for BOTH cameras
+    # Plot segmentation results for cameras
     print("\n" + "-" * 40)
-    print("Plotting segmentation results for both cameras...")
+    print("Plotting segmentation results...")
     print("-" * 40)
     print(f"  Matplotlib backend: {matplotlib.get_backend()}")
     print(f"  DISPLAY env var: {os.environ.get('DISPLAY', 'Not set')}")
     
-    if left_rgb_image is not None and left_depth_image is not None and left_yellow_mask is not None:
-        plot_segmentation_results(left_rgb_image, left_depth_image, left_yellow_mask, 
-                                  save_path="segmentation_results_left.png",
-                                  title_prefix="Left Camera - ")
-        print("  Saved left camera segmentation to segmentation_results_left.png")
-    
-    if right_rgb_image is not None and right_depth_image is not None and right_yellow_mask is not None:
-        plot_segmentation_results(right_rgb_image, right_depth_image, right_yellow_mask, 
-                                  save_path="segmentation_results_right.png",
-                                  title_prefix="Right Camera - ")
-        print("  Saved right camera segmentation to segmentation_results_right.png")
+    for cam_name, images in camera_images.items():
+        plot_segmentation_results(
+            images['rgb'], images['depth'], images['mask'], 
+            save_path=f"segmentation_results_{cam_name}.png",
+            title_prefix=f"{cam_name.upper()} - "
+        )
+        print(f"  Saved {cam_name} segmentation to segmentation_results_{cam_name}.png")
     
     if segmented_xyz.shape[1] > 0:
         # Visualize segmented point cloud in green
@@ -529,7 +898,7 @@ def main():
         initial_guess = RigidTransform()
         initial_guess.set_translation(centroid)
         # Start with bottle lying on its side (rotated 90 deg about X)
-        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, np.pi/2)))
+        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
         
         print(f"  Initial guess centroid: {centroid}")
         
@@ -570,20 +939,113 @@ def main():
             pos_error = np.linalg.norm(X_WM_estimated.translation() - X_WM_true.translation())
             print(f"\n  Position error: {pos_error*1000:.1f} mm")
             
+            # ========== GRASP SELECTION ==========
+            print("\n" + "-" * 40)
+            print("Phase 5: Grasp Selection on ICP-fitted model...")
+            print("-" * 40)
+            
+            # Transform model point cloud to estimated world pose
+            model_world_xyz = X_WM_estimated @ model_pcl
+            
+            # Create a Drake PointCloud with the transformed model
+            grasp_cloud = PointCloud(model_world_xyz.shape[1], Fields(BaseField.kXYZs | BaseField.kNormals))
+            grasp_cloud.mutable_xyzs()[:] = model_world_xyz
+            
+            # Estimate normals on the model point cloud
+            grasp_cloud.EstimateNormals(radius=0.05, num_closest=30)
+            
+            # Flip normals outward (away from centroid)
+            centroid_model = np.mean(model_world_xyz, axis=1)
+            grasp_cloud.FlipNormalsTowardPoint(centroid_model + np.array([0, 0, 1]))  # Flip away from center
+            
+            print(f"  Model cloud in world frame: {grasp_cloud.size()} points with normals")
+            
+            # Visualize the model with normals
+            meshcat.SetObject("pcl_grasp_cloud", grasp_cloud, point_size=0.003, rgba=Rgba(0, 1, 1, 1))
+            
+            # Select best grasp (with debug=True to see rejection reasons)
+            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=10000, debug=True)
+            
+            if best_X_G is not None:
+                print(f"\n  ✓ Best grasp found!")
+                print(f"    Cost: {best_cost:.3f}")
+                print(f"    Position: {best_X_G.translation()}")
+                rpy_grasp = RollPitchYaw(best_X_G.rotation())
+                print(f"    RPY: [{rpy_grasp.roll_angle():.3f}, {rpy_grasp.pitch_angle():.3f}, {rpy_grasp.yaw_angle():.3f}]")
+                
+                # ========== PRE-GRASP POSE CALCULATION ==========
+                print("\n" + "-" * 40)
+                print("Phase 6: Computing Pre-Grasp Pose...")
+                print("-" * 40)
+                
+                # Get the best grasp position
+                grasp_pos = best_X_G.translation()
+                
+                # Pre-grasp position: same x, y, but z + 0.3 (30cm above grasp)
+                pre_grasp_pos = np.array([
+                    grasp_pos[0],       # Same X
+                    grasp_pos[1],       # Same Y
+                    grasp_pos[2] + 0.3  # 0.3m above the grasp
+                ])
+                
+                # Pre-grasp orientation: gripper pointing straight down
+                # We want gripper Y-axis (approach direction) to align with world -Z (down)
+                # This is achieved by rotating -90 degrees about the world X-axis
+                #
+                # The rotation maps:
+                #   - Gripper X → World X:  [1, 0, 0] (fingers close horizontally)
+                #   - Gripper Y → World -Z: [0, 0, -1] (approach direction points down)
+                #   - Gripper Z → World Y:  [0, 1, 0] (finger length horizontal)
+                R_pregrasp = RotationMatrix(RollPitchYaw(-np.pi/2, 0, 0))
+                
+                # Create the pre-grasp RigidTransform
+                X_pregrasp = RigidTransform(R_pregrasp, pre_grasp_pos)
+                
+                print(f"  Grasp position:     {grasp_pos}")
+                print(f"  Pre-grasp position: {pre_grasp_pos}")
+                rpy_pregrasp = RollPitchYaw(R_pregrasp)
+                print(f"  Pre-grasp RPY:      [{rpy_pregrasp.roll_angle():.3f}, {rpy_pregrasp.pitch_angle():.3f}, {rpy_pregrasp.yaw_angle():.3f}]")
+                
+                # Visualize as a triad (coordinate frame) in Meshcat
+                # Red = X (finger close direction), Green = Y (approach, pointing down), Blue = Z
+                meshcat.SetTriad(
+                    path="pre_grasp_pose",
+                    length=0.1,      # 10cm axes
+                    radius=0.005     # 5mm thick
+                )
+                meshcat.SetTransform("pre_grasp_pose", X_pregrasp)
+                
+                # Also draw a gripper at the pre-grasp pose for visualization
+                draw_grasp_candidate(meshcat, X_pregrasp, prefix="pre_grasp_gripper")
+                
+                print(f"\n  ✓ Pre-grasp pose visualized in Meshcat")
+                print(f"    - 'pre_grasp_pose': Coordinate frame triad")
+                print(f"    - 'pre_grasp_gripper': Gripper visualization")
+                
+            else:
+                print("\n  ✗ No valid grasp found")
+            
         except Exception as e:
             print(f"  ✗ ICP failed: {e}")
+            import traceback
+            traceback.print_exc()
     else:
         print("  ✗ No yellow points found - cannot run ICP")
         print("    Try adjusting the robot pose or color thresholds")
 
     print("\n" + "=" * 60)
     print("Visualization Guide:")
-    print("  - pcl_left_raw: Raw point cloud from left camera")
-    print("  - pcl_right_raw: Raw point cloud from right camera")
-    print("  - pcl_fused_raw: Fused point cloud from both cameras")
+    print("  - pcl_camera0_raw: Raw point cloud from camera0")
+    print("  - pcl_camera1_raw: Raw point cloud from camera1")
+    print("  - pcl_camera2_raw: Raw point cloud from camera2")
+    print("  - pcl_fused_raw: Fused point cloud from all cameras")
     print("  - pcl_segmented: Yellow-segmented points (green)")
     print("  - pcl_model_origin: Model point cloud at origin (blue)")
     print("  - pcl_estimated: ICP result - model at estimated pose (magenta)")
+    print("  - pcl_grasp_cloud: Model with normals for grasp selection (cyan)")
+    print("  - grasp_N_best: Top N grasp candidates (gripper visualizations)")
+    print("  - pre_grasp_pose: Coordinate triad for pre-grasp approach pose")
+    print("  - pre_grasp_gripper: Gripper at pre-grasp pose (pointing down)")
     print("=" * 60)
     
     print("\nPress Ctrl+C to exit.")

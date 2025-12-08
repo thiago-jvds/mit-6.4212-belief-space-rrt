@@ -49,7 +49,7 @@ def load_rrbt_config(filename="config.yaml"):
         if "q_goal" in config["simulation"]:
             config["simulation"]["q_goal"] = np.array(config["simulation"]["q_goal"])
 
-    # Convert camera pose to numpy arrays if present
+    # Convert camera pose and chart position to numpy arrays if present
     if "visualization" in config:
         if "camera_position" in config["visualization"]:
             config["visualization"]["camera_position"] = np.array(
@@ -58,6 +58,10 @@ def load_rrbt_config(filename="config.yaml"):
         if "camera_target" in config["visualization"]:
             config["visualization"]["camera_target"] = np.array(
                 config["visualization"]["camera_target"]
+            )
+        if "chart_position" in config["visualization"]:
+            config["visualization"]["chart_position"] = np.array(
+                config["visualization"]["chart_position"]
             )
 
     return NestedNamespace(config)

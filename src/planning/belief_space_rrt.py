@@ -1,18 +1,21 @@
 """
 Belief-Space RRT (RRBT) Planning Algorithm - Anytime Version
 
-This implements RRBT with a combined cost function:
-    cost = path_length + λ × trace(Σ)
+This implements RRBT with a discrete 3-bin Bayes filter and combined cost function:
+    cost = path_length + λ × misclassification_risk
+
+Where misclassification_risk = 1 - max(belief)
 
 The planner uses RRT*-style anytime behavior:
 1. Builds a tree that balances path efficiency and information gain
-2. Tracks the BEST valid solution (lowest cost with trace(Σ) < threshold)
+2. Tracks the BEST valid solution (lowest cost with misclassification_risk < threshold)
 3. Continues exploring for ALL iterations to find better solutions
 4. Returns the best path found after max_iterations
 """
 
 import numpy as np
 from src.planning.rrt_tools import RRBT_tools
+from src.estimation.bayes_filter import calculate_misclassification_risk
 import random
 
 from typing import Callable, Optional
@@ -44,7 +47,7 @@ def rrbt_planning(
         max_iterations: Planning iterations (runs ALL iterations)
         prob_sample_q_goal: Probability of sampling toward goal
         prob_sample_q_light: Probability of sampling toward light region
-        max_uncertainty: Threshold for trace(Σ) to consider a solution valid
+        max_uncertainty: Threshold for misclassification_risk to consider a solution valid
         lambda_weight: Trade-off between path length and uncertainty
             - Small (0.1-1): Prioritize shorter paths
             - Medium (1-10): Balanced
@@ -60,7 +63,7 @@ def rrbt_planning(
     tools = RRBT_tools(
         problem, 
         max_uncertainty=max_uncertainty, 
-        initial_uncertainty=1.0,
+        initial_uncertainty=1.0,  # Not used for discrete Bayes filter
         lambda_weight=lambda_weight,
     )
 
@@ -92,43 +95,44 @@ def rrbt_planning(
                 # Found a better solution!
                 best_node = last_node
                 best_cost = last_node.cost
-                uncertainty = np.trace(last_node.sigma)
+                misclass_risk = calculate_misclassification_risk(last_node.belief)
                 
                 if first_solution_iter is None:
                     first_solution_iter = k + 1
                     print(
                         f"\n      First solution at iter {k + 1}: "
-                        f"Uncertainty={uncertainty:.4f}, "
+                        f"MisclassRisk={misclass_risk:.4f}, "
                         f"PathLen={last_node.path_length:.2f}, "
                         f"Cost={best_cost:.4f}"
                     )
                 else:
                     print(
                         f"\n      Better solution at iter {k + 1}: "
-                        f"Uncertainty={uncertainty:.4f}, "
+                        f"MisclassRisk={misclass_risk:.4f}, "
                         f"PathLen={last_node.path_length:.2f}, "
                         f"Cost={best_cost:.4f}"
                     )
             elif first_solution_iter is not None:
                 if verbose:
+                    misclass_risk = calculate_misclassification_risk(last_node.belief)
                     print(
                         f"\n            Found another solution at iter {k + 1}: "
-                        f"Uncertainty={uncertainty:.4f}, "
+                        f"MisclassRisk={misclass_risk:.4f}, "
                         f"PathLen={last_node.path_length:.2f}, "
-                        f"Cost={best_cost:.4f}"
+                        f"Cost={last_node.cost:.4f}"
                     )
 
-        # Visualize progresss
+        # Visualize progress
         if visualize_callback and (k + 1) % visualize_interval == 0:
             visualize_callback(tools.rrbt_tree, k + 1)
 
         # Progress report
         if k % 100 == 0:
-            uncertainty = np.trace(last_node.sigma)
+            misclass_risk = calculate_misclassification_risk(last_node.belief)
             best_info = f", Best={best_cost:.3f}" if best_node else ""
             print(
                 f"   > RRBT Iter {k + 1}/{max_iterations} "
-                f"(Uncertainty: {uncertainty:.3f}, PathLen: {last_node.path_length:.2f}{best_info})",
+                f"(MisclassRisk: {misclass_risk:.3f}, PathLen: {last_node.path_length:.2f}{best_info})",
                 end="\r",
             )
 
@@ -136,8 +140,8 @@ def rrbt_planning(
     # This catches any improvements from rewiring that we might have missed
     print(f"\n   Scanning {len(tools.rrbt_tree.nodes)} nodes for best solution...")
     for node in tools.rrbt_tree.nodes:
-        uncertainty = np.trace(node.sigma)
-        if uncertainty <= max_uncertainty and node.cost < best_cost:
+        misclass_risk = calculate_misclassification_risk(node.belief)
+        if misclass_risk <= max_uncertainty and node.cost < best_cost:
             best_node = node
             best_cost = node.cost
 
@@ -146,15 +150,16 @@ def rrbt_planning(
         path_to_info = tools.backup_path_from_node(best_node)
         pred_q_goal = tools.sample_final_goal(best_node)
         
-        uncertainty = np.trace(best_node.sigma)
+        misclass_risk = calculate_misclassification_risk(best_node.belief)
         print(
-            f"✅ RRBT Complete after {max_iterations} iterations."
+            f"RRBT Complete after {max_iterations} iterations."
         )
         print(
-            f"   Best solution: Uncertainty={uncertainty:.4f}, "
+            f"   Best solution: MisclassRisk={misclass_risk:.4f}, "
             f"PathLength={best_node.path_length:.2f}, "
             f"Cost={best_cost:.4f}"
         )
+        print(f"   Final belief: {best_node.belief}")
         if first_solution_iter:
             print(
                 f"   First solution found at iteration {first_solution_iter}"
@@ -166,6 +171,6 @@ def rrbt_planning(
         return (path_to_info, pred_q_goal), max_iterations
     
     # No valid solution found
-    print(f"❌ RRBT: No solution found after {max_iterations} iterations.")
-    print(f"   No path achieved uncertainty < {max_uncertainty}")
+    print(f"RRBT: No solution found after {max_iterations} iterations.")
+    print(f"   No path achieved misclassification_risk < {max_uncertainty}")
     return None, max_iterations

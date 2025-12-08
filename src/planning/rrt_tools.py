@@ -103,13 +103,17 @@ class RRBT_tools(RRT_tools):
         We stop ONLY when we are confident about the target's location.
         We DO NOT check if the robot is geometrically at the goal (we don't know where it is!).
         
-        IMPORTANT: We check trace(Σ), NOT the combined cost!
+        IMPORTANT: We check misclassification_risk, NOT the combined cost!
         The combined cost includes path_length which is irrelevant for termination.
         Termination is purely about achieving low uncertainty.
+        
+        misclassification_risk = 1 - max(belief)
         """
-        # Belief Check: Is the trace of covariance small enough?
-        uncertainty = np.trace(node.sigma)
-        if uncertainty > self.MAX_UNCERTAINTY:
+        from src.estimation.bayes_filter import calculate_misclassification_risk
+        
+        # Belief Check: Is the misclassification risk small enough?
+        misclass_risk = calculate_misclassification_risk(node.belief)
+        if misclass_risk > self.MAX_UNCERTAINTY:
             return False
 
         # If we are here, we have gathered enough information.
@@ -118,19 +122,18 @@ class RRBT_tools(RRT_tools):
     def sample_final_goal(self, node):
         """
         Simulate the 'Commitment' step.
-        Now that uncertainty is low, we use the mean of our belief distribution
-        as the best estimate of the goal configuration.
-        """
-        # Mean = The True Goal (Simulation of the estimator converging)
-        # This is our best estimate given the information we've gathered
-        true_goal = np.array(self.problem.goal)
-
-        # Use the mean (best estimate) instead of sampling
-        # This ensures we use a valid configuration and represents our best guess
-        pred_q_goal = true_goal
+        Now that uncertainty is low, we use the MAP (Maximum A Posteriori)
+        estimate to select which bucket the object is in.
         
-        # TODO: re-add proper sampling from the belief distribution like:
-        # pred_q_goal = np.random.multivariate_normal(true_goal, belief_sigma)
-
+        For now, we still return the true goal configuration since
+        the buckets are abstract and will be grounded later.
+        """
+        # Get the MAP estimate (bucket with highest probability)
+        map_bucket = np.argmax(node.belief)
+        
+        # For now, return the true goal configuration
+        # Later this will be grounded to the specific bucket's configuration
+        true_goal = np.array(self.problem.goal)
+        pred_q_goal = true_goal
 
         return pred_q_goal

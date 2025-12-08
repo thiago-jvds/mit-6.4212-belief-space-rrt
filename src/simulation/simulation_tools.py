@@ -166,6 +166,16 @@ class IiwaProblem(Problem):
 
 
 class IiwaProblemBelief(IiwaProblem):
+    """
+    Belief-space planning problem using a discrete 3-bin Bayes filter.
+    
+    The sensor model uses TPR (True Positive Rate) and FPR (False Positive Rate)
+    instead of Gaussian noise covariance matrices.
+    
+    In light region: Informative sensor (TPR=0.8, FPR=0.15 by default)
+    In dark region: Uninformative sensor (TPR=0.5, FPR=0.5 - coin flip)
+    """
+    
     def __init__(
         self,
         q_start,
@@ -174,37 +184,47 @@ class IiwaProblemBelief(IiwaProblem):
         meshcat,
         light_center,
         light_size,
-        scale_R_light,
-        scale_R_dark,
+        tpr_light: float = 0.80,
+        fpr_light: float = 0.15,
+        n_buckets: int = 3,
+        true_bucket: int = 0,
     ):
+        """
+        Args:
+            q_start: Starting joint configuration
+            q_goal: Goal joint configuration
+            gripper_setpoint: Gripper opening width
+            meshcat: Meshcat visualizer instance
+            light_center: Center of the light region [x, y, z]
+            light_size: Size of the light region [dx, dy, dz]
+            tpr_light: True Positive Rate in light region (default 0.80)
+            fpr_light: False Positive Rate in light region (default 0.15)
+            n_buckets: Number of discrete hypothesis buckets (default 3)
+            true_bucket: Ground truth bucket index for simulation (default 0)
+        """
         super().__init__(
             q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
         )
 
+        # Light region parameters
         self.light_center = light_center
         self.light_half = light_size / 2.0
 
-        # --- PHYSICS CHANGES FOR ACTIVE PERCEPTION ---
-        # 1. State Transition (A=I)
-        # The target stays where it is.
-        self.A = np.eye(7)
-
-        # 2. Observation Matrix (C=I)
-        # If we see it, we see the full state (simplified).
-        self.C = np.eye(7)
-
-        # 3. Process Noise (Q=None)
-        # REMOVED self.Q because the target is static.
-
-        # 4. Sensor Noise
-
-        self.mustard_pos = q_goal
-
-        self.R_light = np.eye(7) * scale_R_light
-        self.R_dark = np.eye(7) * scale_R_dark
+        # --- TPR/FPR SENSOR MODEL (replaces Kalman R matrices) ---
+        # Light region: informative sensor
+        self.tpr_light = tpr_light
+        self.fpr_light = fpr_light
+        
+        # Dark region: uninformative sensor (coin flip, no information gain)
+        self.tpr_dark = 0.5
+        self.fpr_dark = 0.5
+        
+        # --- BUCKET CONFIGURATION ---
+        self.n_buckets = n_buckets
+        self.true_bucket = true_bucket  # Ground truth for simulation
 
     def is_in_light(self, q: tuple) -> bool:
-        # (Same as previous)
+        """Check if the gripper (camera) is in the light region."""
         plant = self.collision_checker.plant
         context = self.collision_checker.context_plant
         plant.SetPositions(context, plant.GetModelInstanceByName("iiwa"), np.array(q))
@@ -213,10 +233,17 @@ class IiwaProblemBelief(IiwaProblem):
         delta = np.abs(X_Cam.translation() - self.light_center)
         return np.all(delta <= self.light_half)
 
-    def get_dynamics_and_observation(self, q: tuple):
-        """Returns A, Q(None), C, R based on robot location q"""
+    def get_sensor_model(self, q: tuple) -> tuple[float, float]:
+        """
+        Get the sensor model (TPR, FPR) based on robot configuration.
+        
+        Args:
+            q: Joint configuration
+            
+        Returns:
+            (tpr, fpr): True Positive Rate and False Positive Rate
+        """
         if self.is_in_light(q):
-            R = self.R_light
+            return self.tpr_light, self.fpr_light
         else:
-            R = self.R_dark
-        return self.A, None, self.C, R
+            return self.tpr_dark, self.fpr_dark  # Uninformative

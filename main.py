@@ -40,8 +40,9 @@ from src.simulation.sim_setup import (
     visualize_belief_path,
     visualize_belief_tree,
 )
-from src.visualization.belief_visualizer import BeliefVisualizerSystem
+from src.visualization.belief_bar_chart import BeliefBarChartSystem
 from src.estimation.belief_estimator import BeliefEstimatorSystem
+from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_buckets
 from src.utils.config_loader import load_rrbt_config
 from src.utils.camera_pose_manager import restore_camera_pose
 from src.utils.ik_solver import solve_ik_for_pose
@@ -75,31 +76,39 @@ def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewiseP
 
 
 def debug_path_beliefs(problem, path):
-    """Print uncertainty at each waypoint."""
-    sigma = np.eye(7) * 1e-6
+    """Print belief and misclassification risk at each waypoint using discrete Bayes filter."""
+    # Initialize with uniform prior
+    belief = np.ones(problem.n_buckets) / problem.n_buckets
 
-    print("\n" + "=" * 60)
-    print("PATH BELIEF ANALYSIS")
-    print("=" * 60)
-    print(f"{'Step':>4} | {'Light?':>6} | {'Trace(Σ)':>12} | {'Status':>10}")
-    print("-" * 60)
+    print("\n" + "=" * 70)
+    print("PATH BELIEF ANALYSIS (Discrete Bayes Filter)")
+    print(f"Assumed true bucket: {problem.true_bucket}")
+    print("=" * 70)
+    print(f"{'Step':>4} | {'Light?':>6} | {'Belief':>24} | {'MisclassRisk':>12} | {'Status':>8}")
+    print("-" * 70)
 
     for i, q in enumerate(path):
-        A, Q, C, R = problem.get_dynamics_and_observation(q)
-        sigma_pred = A @ sigma @ A.T + Q
-        S = C @ sigma_pred @ C.T + R
-        K = sigma_pred @ C.T @ np.linalg.inv(S)
-        sigma = (np.eye(7) - K @ C) @ sigma_pred
-
-        uncertainty = np.trace(sigma)
+        tpr, fpr = problem.get_sensor_model(q)
         in_light = problem.is_in_light(q)
-        status = "✓ OK" if uncertainty < 0.01 else "⚠️ HIGH"
+        
+        # Update belief using expected posterior (planning mode)
+        if in_light:
+            belief = expected_posterior_all_buckets(
+                belief, tpr, fpr, 
+                assumed_bucket=problem.true_bucket
+            )
+        # In dark, belief unchanged
+        
+        misclass_risk = calculate_misclassification_risk(belief)
+        status = "OK" if misclass_risk < 0.01 else "HIGH"
+        
+        belief_str = f"[{belief[0]:.3f}, {belief[1]:.3f}, {belief[2]:.3f}]"
 
         print(
-            f"{i:>4} | {'LIGHT' if in_light else 'DARK':>6} | {uncertainty:>12.6f} | {status:>10}"
+            f"{i:>4} | {'LIGHT' if in_light else 'DARK':>6} | {belief_str:>24} | {misclass_risk:>12.4f} | {status:>8}"
         )
 
-    print("=" * 60)
+    print("=" * 70)
 
 
 def main():
@@ -167,8 +176,8 @@ def main():
             plant=plant,
             light_region_center=config.simulation.light_center,
             light_region_size=config.simulation.light_size,
-            sigma_light=np.sqrt(float(config.physics.meas_noise_light)),
-            sigma_dark=np.sqrt(float(config.physics.meas_noise_dark)),
+            tpr_light=float(config.physics.tpr_light),
+            fpr_light=float(config.physics.fpr_light),
         )
     )
 
@@ -280,8 +289,10 @@ def main():
         meshcat=meshcat,
         light_center=config.simulation.light_center,
         light_size=config.simulation.light_size,
-        scale_R_light=float(config.physics.meas_noise_light),
-        scale_R_dark=float(config.physics.meas_noise_dark),
+        tpr_light=float(config.physics.tpr_light),
+        fpr_light=float(config.physics.fpr_light),
+        n_buckets=int(config.planner.n_buckets),
+        true_bucket=int(config.planner.true_bucket),
     )
 
     final_path = None
@@ -425,8 +436,8 @@ def main():
                 plant=exec_plant,
                 light_region_center=config.simulation.light_center,
                 light_region_size=config.simulation.light_size,
-                sigma_light=np.sqrt(float(config.physics.meas_noise_light)),
-                sigma_dark=np.sqrt(float(config.physics.meas_noise_dark)),
+                tpr_light=float(config.physics.tpr_light),
+                fpr_light=float(config.physics.fpr_light),
             )
         )
         exec_perception.set_name("LightDarkPerception")
@@ -437,36 +448,36 @@ def main():
             exec_perception.GetInputPort("iiwa.position")
         )
         
-        # Add Belief Estimator System (Kalman Filter for covariance estimation)
-        # Receives measurement variance from LightDarkRegionSystem (single source of truth)
+        # Add Belief Estimator System (Discrete Bayes Filter)
+        # Receives TPR/FPR sensor model from LightDarkRegionSystem (single source of truth)
         belief_estimator = exec_builder.AddSystem(
             BeliefEstimatorSystem(
-                initial_sigma=np.eye(7) * 1.0,  # High initial uncertainty
+                n_buckets=int(config.planner.n_buckets),
+                true_bucket=int(config.planner.true_bucket),
             )
         )
         belief_estimator.set_name("BeliefEstimator")
         
-        # Connect estimator to perception's measurement_variance output (single source of truth)
+        # Connect estimator to perception's sensor_model output (single source of truth)
         exec_builder.Connect(
-            exec_perception.GetOutputPort("measurement_variance"),
-            belief_estimator.GetInputPort("measurement_variance")
+            exec_perception.GetOutputPort("sensor_model"),
+            belief_estimator.GetInputPort("sensor_model")
         )
         
-        # Add Belief Visualizer System (renders goal uncertainty ellipsoid)
-        # Receives covariance from BeliefEstimatorSystem
+        # Add Belief Bar Chart Visualizer (renders belief as 3 bars)
+        # Receives belief vector from BeliefEstimatorSystem
         belief_viz = exec_builder.AddSystem(
-            BeliefVisualizerSystem(
+            BeliefBarChartSystem(
                 meshcat=meshcat,
-                plant=exec_plant,
-                goal_config=q_goal,  # Use computed q_goal from tf_goal
+                n_buckets=int(config.planner.n_buckets),
             )
         )
-        belief_viz.set_name("BeliefVisualizer")
+        belief_viz.set_name("BeliefBarChart")
         
         # Connect visualizer to estimator output
         exec_builder.Connect(
-            belief_estimator.GetOutputPort("covariance"),
-            belief_viz.GetInputPort("covariance")
+            belief_estimator.GetOutputPort("belief"),
+            belief_viz.GetInputPort("belief")
         )
         
         # Build execution diagram

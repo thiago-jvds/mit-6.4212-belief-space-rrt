@@ -1,21 +1,29 @@
 """
 RRBT Tree - Rapidly-exploring Random Belief Tree
 
-This implements the belief-space RRT with a combined cost function that
-balances path length (distance traveled) and uncertainty (trace of covariance).
+This implements belief-space RRT with a discrete 3-bin Bayes filter.
+The belief state is a probability vector [P(A), P(B), P(C)] representing
+the probability that the object is in each bucket.
 
-Cost Function: cost = path_length + λ × trace(Σ)
-Termination:   trace(Σ) < max_uncertainty
+Cost Function: cost = path_length + λ × misclassification_risk
+Termination:   misclassification_risk < max_uncertainty
 
-This separation ensures:
+Where misclassification_risk = 1 - max(belief)
+
+This ensures:
 - Small λ → prefer shorter paths during tree growth
-- But planner won't stop until uncertainty threshold is met
+- Planner won't stop until uncertainty threshold is met
 - Result: shortest path that achieves goal uncertainty
 """
 
 from collections import deque
 from manipulation.exercises.trajectories.rrt_planner.rrt_planning import TreeNode
 import numpy as np
+from src.simulation.simulation_tools import IiwaProblemBelief
+from src.estimation.bayes_filter import (
+    calculate_misclassification_risk,
+    expected_posterior_all_buckets,
+)
 
 
 class BeliefNode(TreeNode):
@@ -25,33 +33,33 @@ class BeliefNode(TreeNode):
     Attributes:
         value: Joint configuration (7D tuple)
         parent: Parent BeliefNode
-        sigma: Covariance matrix (7x7) representing uncertainty
+        belief: Probability vector [P(A), P(B), P(C)] representing uncertainty
         path_length: Cumulative joint-space distance from root
-        cost: Combined cost = path_length + λ × trace(Σ)
+        cost: Combined cost = path_length + λ × misclassification_risk
     """
     
-    def __init__(self, value, parent=None, sigma=None, cost=0.0, path_length=0.0):
+    def __init__(self, value, parent=None, belief=None, cost=0.0, path_length=0.0):
         super().__init__(value, parent)
 
-        # RRBT Specifics
-        self.sigma = sigma  # Covariance Matrix (7x7)
+        # RRBT Specifics - using discrete Bayes filter
+        self.belief = belief  # Probability vector [P(A), P(B), P(C)]
         self.path_length = path_length  # Cumulative distance from root
-        self.cost = cost  # Combined: path_length + λ × trace(Σ)
+        self.cost = cost  # Combined: path_length + λ × misclassification_risk
 
 
 class RRBT_Tree:
     """
-    Rapidly-exploring Random Belief Tree.
+    Rapidly-exploring Random Belief Tree with discrete Bayes filter.
     
     Uses a combined cost function to balance:
     - Path efficiency (minimize distance traveled)
-    - Information gain (minimize uncertainty)
+    - Information gain (minimize misclassification risk)
     
     Args:
         problem: IiwaProblemBelief instance
         root_value: Starting configuration
-        max_uncertainty: Termination threshold for trace(Σ)
-        initial_uncertainty: Initial diagonal value for Σ₀
+        max_uncertainty: Termination threshold for misclassification_risk
+        initial_uncertainty: Not used (kept for API compatibility)
         lambda_weight: Trade-off parameter (higher = prioritize uncertainty)
     """
     
@@ -60,25 +68,26 @@ class RRBT_Tree:
         problem, 
         root_value, 
         max_uncertainty, 
-        initial_uncertainty=1.0,
+        initial_uncertainty=1.0,  # Kept for API compatibility
         lambda_weight=1.0,
     ):
-        self.problem = problem
+        self.problem: IiwaProblemBelief = problem
         self.cspace = problem.cspace
         self.lambda_weight = lambda_weight
 
-        # We store the goal threshold for termination check
+        # Goal threshold for termination check
         self.GOAL_THRESHOLD = max_uncertainty
 
-        # Initialize Root with HIGH Uncertainty, ZERO path length
-        init_sigma = np.eye(7) * initial_uncertainty
-        init_trace = np.trace(init_sigma)
-        init_cost = 0.0 + lambda_weight * init_trace  # path_length=0 at root
+        # Initialize Root with UNIFORM PRIOR (maximum uncertainty)
+        n_buckets = problem.n_buckets
+        init_belief = np.ones(n_buckets) / n_buckets  # [1/3, 1/3, 1/3]
+        init_risk = calculate_misclassification_risk(init_belief)  # 0.667 for 3 buckets
+        init_cost = 0.0 + lambda_weight * init_risk  # path_length=0 at root
         
         self.root = BeliefNode(
             root_value, 
             parent=None, 
-            sigma=init_sigma, 
+            belief=init_belief, 
             cost=init_cost,
             path_length=0.0,
         )
@@ -105,42 +114,45 @@ class RRBT_Tree:
 
     def Propagate(self, parent_node, q_target):
         """
-        Propagate belief from parent_node to q_target.
+        Propagate belief from parent_node to q_target using discrete Bayes filter.
+        
+        In light region: Uses expected_posterior_all_buckets() to compute
+                        expected belief after measuring all 3 buckets,
+                        assuming the object is in true_bucket (for planning)
+        In dark region: Belief unchanged (uninformative measurements)
         
         Returns dict with:
-            - sigma: Updated covariance matrix
+            - belief: Updated probability vector [P(A), P(B), P(C)]
             - path_length: Cumulative distance from root
-            - cost: Combined cost = path_length + λ × trace(Σ)
+            - cost: Combined cost = path_length + λ × misclassification_risk
         """
-        sigma_parent = parent_node.sigma
+        belief_parent = parent_node.belief
 
-        # Get Dynamics (Q is None for static target)
-        A, _, C, R = self.problem.get_dynamics_and_observation(q_target)
+        # Get sensor model (TPR, FPR) based on robot location
+        tpr, fpr = self.problem.get_sensor_model(q_target)
 
-        # 1. Prediction (Static Target: Sigma stays constant)
-        # sigma_pred = A @ sigma_parent @ A.T + Q (where Q=0, A=I)
-        sigma_pred = sigma_parent
-
-        # 2. Update (Measurement reduces Sigma based on light/dark region)
-        S = C @ sigma_pred @ C.T + R
-        try:
-            K_T = np.linalg.solve(S, (sigma_pred @ C.T).T)
-            K = K_T.T
-        except np.linalg.LinAlgError:
-            return None
-
-        sigma_new = (np.eye(7) - K @ C) @ sigma_pred
+        # Update belief based on light/dark region
+        if self.problem.is_in_light(q_target):
+            # In light: measure all buckets (expected posterior for planning)
+            # We assume the object is in true_bucket for computing expected posterior
+            belief_new = expected_posterior_all_buckets(
+                belief_parent, tpr, fpr, 
+                assumed_bucket=self.problem.true_bucket
+            )
+        else:
+            # In dark: uninformative measurements, belief unchanged
+            belief_new = belief_parent.copy()
         
-        # 3. Compute path length increment
+        # Compute path length increment
         dist_increment = self.cspace.distance(parent_node.value, q_target)
         path_length_new = parent_node.path_length + dist_increment
         
-        # 4. Compute combined cost
-        trace_sigma = np.trace(sigma_new)
-        cost_new = path_length_new + self.lambda_weight * trace_sigma
+        # Compute combined cost using misclassification risk
+        misclass_risk = calculate_misclassification_risk(belief_new)
+        cost_new = path_length_new + self.lambda_weight * misclass_risk
 
         return {
-            "sigma": sigma_new, 
+            "belief": belief_new, 
             "cost": cost_new,
             "path_length": path_length_new,
         }
@@ -152,18 +164,18 @@ class RRBT_Tree:
         # Use nearest_node as the parent to maintain tree structure.
         # (Previously tried ALL neighbors, but this caused everything to connect
         # to ROOT since ROOT has lowest uncertainty, creating a "fan" not a tree)
-        belief = self.Propagate(nearest_node, q_new)
-        if belief is None:
+        belief_result = self.Propagate(nearest_node, q_new)
+        if belief_result is None:
             return None  # Can't connect to intended parent
 
         best_parent = nearest_node
-        best_belief = belief
+        best_belief = belief_result
 
         # 2. CREATE NODE
         new_node = BeliefNode(
             q_new, 
             best_parent, 
-            best_belief["sigma"], 
+            best_belief["belief"], 
             best_belief["cost"],
             best_belief["path_length"],
         )
@@ -186,10 +198,6 @@ class RRBT_Tree:
             if self._is_ancestor(node, new_node):
                 continue
 
-            # # Check if path from new_node to node is collision-free
-            # if not self.problem.safe_path(new_node.value, node.value):
-            #     continue  # Skip this neighbor node b/c path has collision
-
             # Try connecting new_node -> neighbor
             belief_rewire = self.Propagate(new_node, node.value)
 
@@ -200,7 +208,7 @@ class RRBT_Tree:
 
                 # Attach to new parent
                 node.parent = new_node
-                node.sigma = belief_rewire["sigma"]
+                node.belief = belief_rewire["belief"]
                 node.cost = belief_rewire["cost"]
                 node.path_length = belief_rewire["path_length"]
                 new_node.children.append(node)
@@ -222,17 +230,17 @@ class RRBT_Tree:
             iterations += 1
 
             if iterations > MAX_OPERATIONS:
-                print("🚨 CRITICAL ERROR: Infinite Loop detected in RRBT Rewire!")
+                print("CRITICAL ERROR: Infinite Loop detected in RRBT Rewire!")
                 print("   A cycle likely exists in the tree.")
                 break
 
             for v in list(u.children):
-                belief = self.Propagate(u, v.value)
+                belief_result = self.Propagate(u, v.value)
 
-                if belief:
-                    v.sigma = belief["sigma"]
-                    v.cost = belief["cost"]
-                    v.path_length = belief["path_length"]
+                if belief_result:
+                    v.belief = belief_result["belief"]
+                    v.cost = belief_result["cost"]
+                    v.path_length = belief_result["path_length"]
                     queue.append(v)
                 else:
                     # Branch is now invalid/dead due to parent change

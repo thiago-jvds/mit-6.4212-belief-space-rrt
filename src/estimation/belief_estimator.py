@@ -1,13 +1,15 @@
 """
-BeliefEstimatorSystem - A Drake LeafSystem for Kalman Filter belief estimation.
+BeliefEstimatorSystem - A Drake LeafSystem for discrete Bayes Filter estimation.
 
-This system maintains and updates the belief state (covariance matrix) based on
-measurement variance from the LightDarkRegionSystem. It implements the estimation
+This system maintains and updates the belief state (probability vector) based on
+TPR/FPR sensor model from the LightDarkRegionSystem. It implements the estimation
 layer in the Perception -> Estimation -> Visualization pipeline.
 
-Single Source of Truth: Measurement noise parameters are NOT duplicated here.
-Instead, the system receives the current measurement variance from the upstream
-LightDarkRegionSystem, which is the single source of truth for noise parameters.
+Single Source of Truth: Sensor parameters (TPR/FPR) are NOT duplicated here.
+Instead, the system receives the current sensor model from the upstream
+LightDarkRegionSystem, which is the single source of truth for sensor parameters.
+
+Belief State: [P(A), P(B), P(C)] - probability that object is in each bucket.
 """
 
 import numpy as np
@@ -15,96 +17,102 @@ from pydrake.all import (
     LeafSystem,
     BasicVector,
 )
+from src.estimation.bayes_filter import bayes_update_all_buckets
 
 
 class BeliefEstimatorSystem(LeafSystem):
     """
-    A Drake System that maintains Kalman Filter belief state.
+    A Drake System that maintains discrete Bayes Filter belief state.
     
     The system:
-    - Receives measurement variance from LightDarkRegionSystem (single source of truth)
-    - Maintains covariance matrix as discrete state
-    - Updates belief via Kalman Filter using the received variance
-    - Outputs current covariance for downstream systems (e.g., visualization)
+    - Receives sensor model (TPR, FPR) from LightDarkRegionSystem
+    - Maintains belief vector as discrete state
+    - Updates belief via Bayes Filter when in light region
+    - Outputs current belief for downstream systems (e.g., visualization)
     
     Inputs:
-        measurement_variance (1D): Current measurement variance (sigma^2)
-            from LightDarkRegionSystem - this is the single source of truth
+        sensor_model (2D): [TPR, FPR] from LightDarkRegionSystem
+            - In light: informative (TPR=0.8, FPR=0.15)
+            - In dark: uninformative (TPR=0.5, FPR=0.5)
         
     Outputs:
-        covariance (49D): Flattened 7x7 covariance matrix
+        belief (n_buckets D): Probability vector [P(A), P(B), P(C)]
         
     Discrete State:
-        sigma (7x7 flattened to 49D): Covariance matrix representing target uncertainty
+        belief (n_buckets elements): Probability distribution over hypotheses
     """
     
     def __init__(
         self,
-        initial_sigma=None,
-        update_period=0.01,
+        n_buckets: int = 3,
+        true_bucket: int = 0,
+        update_period: float = 0.01,
     ):
         """
         Args:
-            initial_sigma: Initial 7x7 covariance matrix (default: I)
-            update_period: Kalman filter update period in seconds
+            n_buckets: Number of discrete hypothesis buckets (default: 3)
+            true_bucket: Ground truth bucket index for simulation (default: 0)
+            update_period: Bayes filter update period in seconds
         """
         LeafSystem.__init__(self)
         
-        # Input port: measurement variance from LightDarkRegionSystem
-        # This is the single source of truth for noise - no R_light/R_dark stored here
-        self._variance_port = self.DeclareVectorInputPort("measurement_variance", 1)
+        self._n_buckets = n_buckets
+        self._true_bucket = true_bucket
         
-        # Discrete state: flattened covariance matrix (7x7 = 49 elements)
-        if initial_sigma is None:
-            initial_sigma = np.eye(7) * 1.0  # High initial uncertainty
-        self._initial_sigma = initial_sigma
-        self._sigma_state_index = self.DeclareDiscreteState(initial_sigma.flatten())
+        # Input port: sensor model [TPR, FPR] from LightDarkRegionSystem
+        self._sensor_port = self.DeclareVectorInputPort("sensor_model", 2)
         
-        # Output port: current covariance (flattened 7x7)
+        # Discrete state: belief vector (n_buckets elements)
+        # Initialize with uniform prior (maximum entropy)
+        initial_belief = np.ones(n_buckets) / n_buckets
+        self._belief_state_index = self.DeclareDiscreteState(initial_belief)
+        
+        # Output port: current belief vector
         self.DeclareVectorOutputPort(
-            "covariance",
-            49,  # 7x7 flattened
-            self._CalcCovariance,
+            "belief",
+            n_buckets,
+            self._CalcBelief,
         )
         
-        # Periodic discrete update for Kalman Filter belief propagation
+        # Periodic discrete update for Bayes Filter belief propagation
         self.DeclarePeriodicDiscreteUpdateEvent(
             period_sec=update_period,
             offset_sec=0.0,
-            update=self._DoKalmanUpdate,
+            update=self._DoBayesUpdate,
         )
     
-    def _CalcCovariance(self, context, output):
-        """Output the current covariance matrix (flattened)."""
-        sigma_flat = context.get_discrete_state(self._sigma_state_index).get_value()
-        output.SetFromVector(sigma_flat)
+    def _CalcBelief(self, context, output):
+        """Output the current belief vector."""
+        belief = context.get_discrete_state(self._belief_state_index).get_value()
+        output.SetFromVector(belief)
     
-    def _DoKalmanUpdate(self, context, discrete_state):
+    def _DoBayesUpdate(self, context, discrete_state):
         """
-        Kalman Filter discrete update step.
+        Bayes Filter discrete update step.
         
-        Updates the covariance matrix using the measurement variance
+        Updates the belief vector using the TPR/FPR sensor model
         received from LightDarkRegionSystem (single source of truth).
+        
+        Only updates when in light region (TPR != 0.5).
+        In dark region, measurements are uninformative, so belief unchanged.
         """
-        # Get measurement variance from LightDarkRegionSystem (single source of truth)
-        variance = self._variance_port.Eval(context)[0]
+        # Get sensor model from LightDarkRegionSystem (single source of truth)
+        sensor_model = self._sensor_port.Eval(context)
+        tpr, fpr = sensor_model[0], sensor_model[1]
         
-        # Build observation noise covariance R = variance * I
-        R = np.eye(7) * variance
+        # Get current belief from discrete state
+        belief_vec = discrete_state.get_mutable_vector(self._belief_state_index)
+        current_belief = belief_vec.get_mutable_value().copy()
         
-        # Get current covariance from discrete state
-        sigma_flat = discrete_state.get_mutable_vector(self._sigma_state_index)
-        sigma = sigma_flat.get_mutable_value().reshape(7, 7)
-        
-        # Kalman Filter update (static target: A=I, C=I, Q=0)
-        # Prediction: sigma_pred = A @ sigma @ A.T + Q = sigma (no process noise)
-        sigma_pred = sigma
-        
-        # Update step
-        C = np.eye(7)
-        S = C @ sigma_pred @ C.T + R  # Innovation covariance
-        K = sigma_pred @ C.T @ np.linalg.inv(S)  # Kalman gain
-        sigma_new = (np.eye(7) - K @ C) @ sigma_pred  # Updated covariance
-        
-        # Write back to state
-        sigma_flat.set_value(sigma_new.flatten())
+        # Only update if sensor is informative (in light region)
+        # In dark region, TPR = FPR = 0.5 (coin flip, no information)
+        if abs(tpr - 0.5) > 1e-6:  # Not in dark
+            # Update belief by measuring all buckets
+            updated_belief = bayes_update_all_buckets(
+                current_belief, 
+                self._true_bucket, 
+                tpr, 
+                fpr
+            )
+            belief_vec.set_value(updated_belief)
+        # If in dark, belief unchanged (uninformative measurements)

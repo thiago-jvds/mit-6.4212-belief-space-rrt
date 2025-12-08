@@ -35,20 +35,29 @@ from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClou
 from manipulation.icp import IterativeClosestPoint
 from manipulation.mustard_depth_camera_example import MustardPointCloud
 from manipulation.utils import ConfigureParser
+from manipulation.pick import MakeGripperFrames, MakeGripperPoseTrajectory, MakeGripperCommandTrajectory
 from pydrake.all import (
     AbstractValue,
     AddMultibodyPlantSceneGraph,
+    BasicVector,
     Box,
     Concatenate,
+    ConstantVectorSource,
+    Context,
     DiagramBuilder,
+    Integrator,
+    JacobianWrtVariable,
     LeafSystem,
     MeshcatVisualizer,
     MeshcatVisualizerParams,
+    MultibodyPlant,
     Parser,
+    PiecewisePolynomial,
+    PiecewisePose,
     Simulator,
     Meshcat,
     MeshcatParams,
-    ConstantVectorSource,
+    ConstantValueSource,
     PointCloud,
     Fields,
     BaseField,
@@ -57,6 +66,7 @@ from pydrake.all import (
     RotationMatrix,
     RollPitchYaw,
     RandomGenerator,
+    TrajectorySource,
     UniformlyRandomRotationMatrix,
 )
 
@@ -396,6 +406,191 @@ class MustardIterativeClosestPoint(LeafSystem):
         )
 
         output.set_value(X_WOhat)
+
+
+# ============================================================================
+# PSEUDO-INVERSE CONTROLLER (from pick_and_place_initials_example.py)
+# ============================================================================
+
+class PseudoInverseController(LeafSystem):
+    """
+    Jacobian pseudo-inverse controller for end-effector velocity control.
+    
+    Takes desired gripper spatial velocity V_WG and current joint positions,
+    outputs joint velocities using the Jacobian pseudo-inverse.
+    """
+    def __init__(self, plant: MultibodyPlant) -> None:
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self._iiwa = plant.GetModelInstanceByName("iiwa")
+        self._G = plant.GetBodyByName("body").body_frame()
+        self._W = plant.world_frame()
+
+        self.V_G_port = self.DeclareVectorInputPort("V_WG", 6)
+        self.q_port = self.DeclareVectorInputPort("iiwa.position", 7)
+        self.DeclareVectorOutputPort("iiwa.velocity", 7, self.CalcOutput)
+        self.iiwa_start = plant.GetJointByName("iiwa_joint_1").velocity_start()
+        self.iiwa_end = plant.GetJointByName("iiwa_joint_7").velocity_start()
+
+    def CalcOutput(self, context: Context, output: BasicVector) -> None:
+        V_G = self.V_G_port.Eval(context)
+        q = self.q_port.Eval(context)
+        self._plant.SetPositions(self._plant_context, self._iiwa, q)
+        J_G = self._plant.CalcJacobianSpatialVelocity(
+            self._plant_context,
+            JacobianWrtVariable.kV,
+            self._G,
+            [0, 0, 0],
+            self._W,
+            self._W,
+        )
+        J_G = J_G[:, self.iiwa_start : self.iiwa_end + 1]  # Only iiwa terms.
+        v = np.linalg.pinv(J_G).dot(V_G)
+        output.SetFromVector(v)
+
+
+# ============================================================================
+# GRASP EXECUTION TRAJECTORY SYSTEM
+# ============================================================================
+
+class GraspExecutionTrajectory(LeafSystem):
+    """
+    LeafSystem that generates a trajectory to execute a grasp motion.
+    
+    Outputs V_WG (spatial velocity) for the PseudoInverseController and
+    wsg_position for the gripper.
+    
+    Executes: initial → pregrasp → grasp → lift
+    """
+    
+    def __init__(self, plant):
+        """
+        Args:
+            plant: The MultibodyPlant (used to get gripper body index)
+        """
+        LeafSystem.__init__(self)
+        
+        # Get gripper body index
+        self._gripper_body_index = plant.GetBodyByName("body").index()
+        
+        # Input: current body poses (to get initial gripper pose)
+        self.DeclareAbstractInputPort(
+            "body_poses", AbstractValue.Make([RigidTransform()])
+        )
+        
+        # State to store trajectories (velocity trajectory and wsg trajectory)
+        self._traj_V_G_index = self.DeclareAbstractState(
+            AbstractValue.Make(PiecewisePolynomial())
+        )
+        self._traj_wsg_index = self.DeclareAbstractState(
+            AbstractValue.Make(PiecewisePolynomial())
+        )
+        self._end_time_index = self.DeclareAbstractState(
+            AbstractValue.Make(0.0)
+        )
+        
+        # Outputs
+        self.DeclareVectorOutputPort("V_WG", 6, self.CalcGripperVelocity)
+        self.DeclareVectorOutputPort("wsg_position", 1, self.CalcWsgPosition)
+    
+    def initialize_hold(self, context):
+        """Initialize with a zero-velocity hold trajectory."""
+        # Create a constant zero velocity trajectory
+        # Shape: (6, 2) for 2 breakpoints with 6-dimensional velocity
+        zero_vel = np.zeros((6, 2))
+        traj_V_G = PiecewisePolynomial.ZeroOrderHold([0.0, 1000.0], zero_vel)
+        
+        # Create a constant open gripper trajectory
+        # Shape: (1, 2) for 2 breakpoints with 1-dimensional output
+        opened = np.array([[0.107, 0.107]])
+        traj_wsg = PiecewisePolynomial.ZeroOrderHold([0.0, 1000.0], opened)
+        
+        state = context.get_mutable_state()
+        state.get_mutable_abstract_state(int(self._traj_V_G_index)).set_value(traj_V_G)
+        state.get_mutable_abstract_state(int(self._traj_wsg_index)).set_value(traj_wsg)
+        state.get_mutable_abstract_state(int(self._end_time_index)).set_value(1000.0)
+
+    def set_grasp_trajectory(
+        self,
+        context,
+        X_G_initial,
+        X_Gpregrasp,
+        X_Ggrasp,
+        X_Glift,
+        start_time,
+    ):
+        """
+        Set up grasp trajectory starting at start_time.
+        Returns the end time of the trajectory.
+        """
+        times = {
+            "initial": start_time,
+            "pregrasp": start_time + 3.0,
+            "grasp_start": start_time + 5.0,
+            "grasp_end": start_time + 6.0,
+            "lift": start_time + 8.0,
+        }
+
+        poses_dict = {
+            "initial": X_G_initial,
+            "pregrasp": X_Gpregrasp,
+            "grasp_start": X_Ggrasp,
+            "grasp_end": X_Ggrasp,
+            "lift": X_Glift,
+        }
+
+        print(f"  Trajectory keyframes (start={start_time:.2f}s):")
+        for name, t in times.items():
+            print(f"    {name}: t={t:.1f}s, pos={poses_dict[name].translation()}")
+
+        sample_times = [times[k] for k in ["initial", "pregrasp", "grasp_start", "grasp_end", "lift"]]
+        poses = [poses_dict[k] for k in ["initial", "pregrasp", "grasp_start", "grasp_end", "lift"]]
+        
+        # Create pose trajectory and get its derivative (velocity)
+        traj_X_G = PiecewisePose.MakeLinear(sample_times, poses)
+        traj_V_G = traj_X_G.MakeDerivative()
+
+        # Create gripper command trajectory
+        opened = np.array([0.107])
+        closed = np.array([0.0])
+
+        traj_wsg_command = PiecewisePolynomial.FirstOrderHold(
+            [times["initial"], times["grasp_start"]],
+            np.hstack([[opened], [opened]]),
+        )
+        traj_wsg_command.AppendFirstOrderSegment(times["grasp_end"], closed)
+        traj_wsg_command.AppendFirstOrderSegment(times["lift"], closed)
+
+        print(f"  Total duration: {times['lift'] - start_time:.1f} seconds")
+
+        # Store trajectories in state
+        state = context.get_mutable_state()
+        state.get_mutable_abstract_state(int(self._traj_V_G_index)).set_value(traj_V_G)
+        state.get_mutable_abstract_state(int(self._traj_wsg_index)).set_value(traj_wsg_command)
+        state.get_mutable_abstract_state(int(self._end_time_index)).set_value(times["lift"])
+        
+        return times["lift"]
+    
+    def end_time(self, context):
+        """Get trajectory end time."""
+        return context.get_abstract_state(int(self._end_time_index)).get_value()
+    
+    def CalcGripperVelocity(self, context, output):
+        """Output the desired gripper spatial velocity at current time."""
+        traj = context.get_abstract_state(int(self._traj_V_G_index)).get_value()
+        t = context.get_time()
+        # Clamp time to trajectory bounds
+        t = max(traj.start_time(), min(t, traj.end_time()))
+        output.SetFromVector(traj.value(t).flatten())
+    
+    def CalcWsgPosition(self, context, output):
+        """Output the desired gripper position (open/close) at current time."""
+        traj = context.get_abstract_state(int(self._traj_wsg_index)).get_value()
+        t = context.get_time()
+        # Clamp time to trajectory bounds
+        t = max(traj.start_time(), min(t, traj.end_time()))
+        output.SetFromVector(traj.value(t).flatten())
 
 
 # ============================================================================
@@ -795,21 +990,30 @@ def main():
     plant = station.GetSubsystemByName("plant")
 
     # Use q_home to match the default joint positions in the scenario
-    # This prevents the robot from slumping
     q_home = np.array([0, 0.1, 0, -1.2, 0, 1.6, 0])
-    
-    iiwa_position_source = builder.AddSystem(ConstantVectorSource(q_home))
+
+    # Add grasp execution trajectory system (outputs V_WG velocity and wsg commands)
+    plan = builder.AddSystem(GraspExecutionTrajectory(plant))
     builder.Connect(
-        iiwa_position_source.get_output_port(), 
-        station.GetInputPort("iiwa.position")
+        station.GetOutputPort("body_poses"),
+        plan.GetInputPort("body_poses"),
     )
 
-    # Set gripper to open position
-    wsg_position_source = builder.AddSystem(ConstantVectorSource([0.1]))
+    # Add PseudoInverseController: takes V_WG and q, outputs q_dot
+    controller = builder.AddSystem(PseudoInverseController(plant))
+    builder.Connect(plan.GetOutputPort("V_WG"), controller.GetInputPort("V_WG"))
     builder.Connect(
-        wsg_position_source.get_output_port(), 
-        station.GetInputPort("wsg.position")
+        station.GetOutputPort("iiwa.position_measured"),
+        controller.GetInputPort("iiwa.position"),
     )
+
+    # Add Integrator: integrates q_dot to get q (joint positions)
+    integrator = builder.AddSystem(Integrator(7))
+    builder.Connect(controller.get_output_port(), integrator.get_input_port())
+    builder.Connect(integrator.get_output_port(), station.GetInputPort("iiwa.position"))
+
+    # Connect gripper command
+    builder.Connect(plan.GetOutputPort("wsg_position"), station.GetInputPort("wsg.position"))
 
     # Add point cloud generation from cameras
     # The cameras (camera0, camera1, camera2) are defined in two_bins_w_cameras.dmd.yaml
@@ -845,6 +1049,24 @@ def main():
     # Get context and plant context
     context = simulator.get_mutable_context()
     plant_context = plant.GetMyMutableContextFromRoot(context)
+    plan_context = plan.GetMyMutableContextFromRoot(context)
+    integrator_context = integrator.GetMyMutableContextFromRoot(context)
+
+    # Ensure robot starts at home configuration and gripper open
+    iiwa_model = plant.GetModelInstanceByName("iiwa")
+    plant.SetPositions(plant_context, iiwa_model, q_home)
+    if plant.HasModelInstanceNamed("wsg"):
+        wsg_model = plant.GetModelInstanceByName("wsg")
+        wsg_positions = np.zeros(plant.num_positions(wsg_model))
+        if wsg_positions.size > 0:
+            wsg_positions[0] = 0.107  # open width (only first dof if multiple)
+        plant.SetPositions(plant_context, wsg_model, wsg_positions)
+
+    # Initialize integrator with home position (critical for position control!)
+    integrator.set_integral_value(integrator_context, q_home)
+
+    # Initialize the plan with a hold trajectory (zero velocity)
+    plan.initialize_hold(plan_context)
 
     # ========== Randomize mustard bottle position above bin0 ==========
     print("\n" + "-" * 40)
@@ -1159,6 +1381,46 @@ def main():
                 print(f"\n  ✓ Pre-grasp pose visualized in Meshcat")
                 print(f"    - 'pre_grasp_pose': Coordinate frame triad")
                 print(f"    - 'pre_grasp_gripper': Gripper visualization")
+                
+                # ========== EXECUTE GRASP ==========
+                print("\n" + "-" * 40)
+                print("Phase 7: Executing Grasp...")
+                print("-" * 40)
+                
+                # Build lift pose (grasp + 0.2m in Z)
+                lift_pos = best_X_G.translation() + np.array([0, 0, 0.2])
+                X_Glift = RigidTransform(best_X_G.rotation(), lift_pos)
+
+                # Refresh contexts at current simulation time
+                context = simulator.get_mutable_context()
+                plant_context = plant.GetMyMutableContextFromRoot(context)
+                plan_context = plan.GetMyMutableContextFromRoot(context)
+
+                # Get current gripper pose as trajectory start
+                gripper_body = plant.GetBodyByName("body")
+                X_G_initial = plant.EvalBodyPoseInWorld(plant_context, gripper_body)
+
+                # Set up the grasp trajectory
+                end_time = plan.set_grasp_trajectory(
+                    context=plan_context,
+                    X_G_initial=X_G_initial,
+                    X_Gpregrasp=X_pregrasp,
+                    X_Ggrasp=best_X_G,
+                    X_Glift=X_Glift,
+                    start_time=context.get_time(),
+                )
+
+                # Start recording for playback
+                meshcat.StartRecording(set_visualizations_while_recording=True)
+
+                print(f"  Executing trajectory until t={end_time + 1.0:.2f}s")
+                simulator.AdvanceTo(end_time + 1.0)
+                
+                # Publish recording
+                meshcat.StopRecording()
+                meshcat.PublishRecording()
+                
+                print(f"  ✓ Grasp execution complete! Recording available in Meshcat.")
                 
             else:
                 print("\n  ✗ No valid grasp found")

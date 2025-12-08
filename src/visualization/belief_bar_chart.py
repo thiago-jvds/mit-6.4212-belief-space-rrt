@@ -32,22 +32,22 @@ class BeliefBarChartSystem(LeafSystem):
     what it receives from upstream estimation systems.
     
     Inputs:
-        belief (n_buckets D): Probability vector [P(A), P(B), P(C)]
+        belief (n_bins D): Probability vector [P(A), P(B), P(C)]
     """
     
-    # Bar colors for each bucket (colorblind-friendly palette)
+    # Bar colors for each bin (colorblind-friendly palette)
     COLORS = [
-        Rgba(0.2, 0.6, 0.9, 0.8),   # Bucket A: Blue
-        Rgba(0.9, 0.4, 0.3, 0.8),   # Bucket B: Red/Coral
-        Rgba(0.3, 0.8, 0.4, 0.8),   # Bucket C: Green
+        Rgba(0.2, 0.6, 0.9, 0.8),   # Bin A: Blue
+        Rgba(0.9, 0.4, 0.3, 0.8),   # Bin B: Red/Coral
+        Rgba(0.3, 0.8, 0.4, 0.8),   # Bin C: Green
     ]
     
-    BUCKET_LABELS = ['A', 'B', 'C']
+    BIN_LABELS = ['A', 'B', 'C']
     
     def __init__(
         self,
         meshcat: Meshcat,
-        n_buckets: int = 3,
+        n_bins: int = 3,
         chart_position: np.ndarray = None,
         bar_width: float = 0.08,
         bar_spacing: float = 0.12,
@@ -57,7 +57,7 @@ class BeliefBarChartSystem(LeafSystem):
         """
         Args:
             meshcat: Meshcat instance for visualization
-            n_buckets: Number of discrete hypothesis buckets (default: 3)
+            n_bins: Number of discrete hypothesis bins (default: 3)
             chart_position: Position of the chart in world frame [x, y, z]
             bar_width: Width of each bar (meters)
             bar_spacing: Spacing between bar centers (meters)
@@ -67,7 +67,7 @@ class BeliefBarChartSystem(LeafSystem):
         LeafSystem.__init__(self)
         
         self._meshcat: Meshcat | None = meshcat
-        self._n_buckets = n_buckets
+        self._n_bins = n_bins
         self._bar_width = bar_width
         self._bar_spacing = bar_spacing
         self._max_height = max_height
@@ -78,7 +78,7 @@ class BeliefBarChartSystem(LeafSystem):
         self._chart_position = chart_position
         
         # Input port: belief vector from BeliefEstimatorSystem
-        self._belief_port = self.DeclareVectorInputPort("belief", n_buckets)
+        self._belief_port = self.DeclareVectorInputPort("belief", n_bins)
         
         # Periodic publish for Meshcat visualization
         self.DeclarePeriodicPublishEvent(
@@ -94,7 +94,7 @@ class BeliefBarChartSystem(LeafSystem):
     def _setup_meshcat_objects(self):
         """Create initial Meshcat objects for the bar chart."""
         # Create base plate for the chart
-        base_width = self._bar_spacing * (self._n_buckets + 0.5)
+        base_width = self._bar_spacing * (self._n_bins + 0.5)
         base_depth = self._bar_width * 1.5
         base_height = 0.01
         
@@ -109,8 +109,8 @@ class BeliefBarChartSystem(LeafSystem):
         )
         
         # Create initial bars (height will be updated each frame)
-        for i in range(self._n_buckets):
-            bar_x = self._chart_position[0] + (i - (self._n_buckets - 1) / 2) * self._bar_spacing
+        for i in range(self._n_bins):
+            bar_x = self._chart_position[0] + (i - (self._n_bins - 1) / 2) * self._bar_spacing
             bar_y = self._chart_position[1]
             bar_z = self._chart_position[2]
             
@@ -143,14 +143,14 @@ class BeliefBarChartSystem(LeafSystem):
         current_time = context.get_time()
         
         # Update each bar
-        for i in range(self._n_buckets):
+        for i in range(self._n_bins):
             prob = belief[i]
             
             # Compute bar height (minimum height for visibility)
             bar_height = max(0.01, prob * self._max_height)
             
             # Compute bar position (centered at chart_position, offset by index)
-            bar_x = self._chart_position[0] + (i - (self._n_buckets - 1) / 2) * self._bar_spacing
+            bar_x = self._chart_position[0] + (i - (self._n_bins - 1) / 2) * self._bar_spacing
             bar_y = self._chart_position[1]
             bar_z = self._chart_position[2] + bar_height / 2
             

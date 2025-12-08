@@ -9,7 +9,7 @@ Single Source of Truth: Sensor parameters (TPR/FPR) are NOT duplicated here.
 Instead, the system receives the current sensor model from the upstream
 LightDarkRegionSystem, which is the single source of truth for sensor parameters.
 
-Belief State: [P(A), P(B), P(C)] - probability that object is in each bucket.
+Belief State: [P(A), P(B), P(C)] - probability that object is in each bin.
 """
 
 import numpy as np
@@ -17,7 +17,7 @@ from pydrake.all import (
     LeafSystem,
     BasicVector,
 )
-from src.estimation.bayes_filter import bayes_update_all_buckets
+from src.estimation.bayes_filter import bayes_update_all_bins
 
 
 class BeliefEstimatorSystem(LeafSystem):
@@ -36,41 +36,41 @@ class BeliefEstimatorSystem(LeafSystem):
             - In dark: uninformative (TPR=0.5, FPR=0.5)
         
     Outputs:
-        belief (n_buckets D): Probability vector [P(A), P(B), P(C)]
+        belief (n_bins D): Probability vector [P(A), P(B), P(C)]
         
     Discrete State:
-        belief (n_buckets elements): Probability distribution over hypotheses
+        belief (n_bins elements): Probability distribution over hypotheses
     """
     
     def __init__(
         self,
-        n_buckets: int = 3,
-        true_bucket: int = 0,
+        n_bins: int = 3,
+        true_bin: int = 0,
         update_period: float = 0.01,
     ):
         """
         Args:
-            n_buckets: Number of discrete hypothesis buckets (default: 3)
-            true_bucket: Ground truth bucket index for simulation (default: 0)
+            n_bins: Number of discrete hypothesis bins (default: 3)
+            true_bin: Ground truth bin index for simulation (default: 0)
             update_period: Bayes filter update period in seconds
         """
         LeafSystem.__init__(self)
         
-        self._n_buckets = n_buckets
-        self._true_bucket = true_bucket
+        self._n_bins = n_bins
+        self._true_bin = true_bin
         
         # Input port: sensor model [TPR, FPR] from LightDarkRegionSystem
         self._sensor_port = self.DeclareVectorInputPort("sensor_model", 2)
         
-        # Discrete state: belief vector (n_buckets elements)
+        # Discrete state: belief vector (n_bins elements)
         # Initialize with uniform prior (maximum entropy)
-        initial_belief = np.ones(n_buckets) / n_buckets
+        initial_belief = np.ones(n_bins) / n_bins
         self._belief_state_index = self.DeclareDiscreteState(initial_belief)
         
         # Output port: current belief vector
         self.DeclareVectorOutputPort(
             "belief",
-            n_buckets,
+            n_bins,
             self._CalcBelief,
         )
         
@@ -107,10 +107,10 @@ class BeliefEstimatorSystem(LeafSystem):
         # Only update if sensor is informative (in light region)
         # In dark region, TPR = FPR = 0.5 (coin flip, no information)
         if abs(tpr - 0.5) > 1e-6:  # Not in dark
-            # Update belief by measuring all buckets
-            updated_belief = bayes_update_all_buckets(
+            # Update belief by measuring all bins
+            updated_belief = bayes_update_all_bins(
                 current_belief, 
-                self._true_bucket, 
+                self._true_bin, 
                 tpr, 
                 fpr
             )

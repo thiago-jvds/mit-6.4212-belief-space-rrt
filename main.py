@@ -29,10 +29,11 @@ from pydrake.all import (
     RollPitchYaw,
     PiecewisePolynomial,
     TrajectorySource,
+    RandomGenerator
 )
 import argparse
 from src.perception.light_and_dark import LightDarkRegionSystem
-from src.simulation.simulation_tools import IiwaProblemBucketBelief, IiwaProblem
+from src.simulation.simulation_tools import IiwaProblemBinBelief, IiwaProblem
 from src.planning.standard_rrt import rrt_planning
 from src.planning.belief_space_rrt import rrbt_planning
 from src.simulation.sim_setup import (
@@ -42,11 +43,17 @@ from src.simulation.sim_setup import (
 )
 from src.visualization.belief_bar_chart import BeliefBarChartSystem
 from src.estimation.belief_estimator import BeliefEstimatorSystem
-from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_buckets
+from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_bins
 from src.utils.config_loader import load_rrbt_config
 from src.utils.camera_pose_manager import restore_camera_pose
 from src.utils.ik_solver import solve_ik_for_pose
 
+
+# Initialize random number generators
+# pydrake RandomGenerator for pydrake-specific operations
+drake_rng = RandomGenerator(seed=42)  # Fixed seed for reproducibility
+# numpy random generator for uniform random numbers
+np_rng = np.random.default_rng(seed=42)  # Fixed seed for reproducibility
 
 def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewisePolynomial:
     """
@@ -78,11 +85,11 @@ def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewiseP
 def debug_path_beliefs(problem, path):
     """Print belief and misclassification risk at each waypoint using discrete Bayes filter."""
     # Initialize with uniform prior
-    belief = np.ones(problem.n_buckets) / problem.n_buckets
+    belief = np.ones(problem.n_bins) / problem.n_bins
 
     print("\n" + "=" * 70)
     print("PATH BELIEF ANALYSIS (Discrete Bayes Filter)")
-    print(f"Assumed true bucket: {problem.true_bucket}")
+    print(f"Assumed true bin: {problem.true_bin}")
     print("=" * 70)
     print(f"{'Step':>4} | {'Light?':>6} | {'Belief':>24} | {'MisclassRisk':>12} | {'Status':>8}")
     print("-" * 70)
@@ -93,9 +100,9 @@ def debug_path_beliefs(problem, path):
         
         # Update belief using expected posterior (planning mode)
         if in_light:
-            belief = expected_posterior_all_buckets(
+            belief = expected_posterior_all_bins(
                 belief, tpr, fpr, 
-                assumed_bucket=problem.true_bucket
+                assumed_bin=problem.true_bin
             )
         # In dark, belief unchanged
         
@@ -109,6 +116,58 @@ def debug_path_beliefs(problem, path):
         )
 
     print("=" * 70)
+
+
+def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng: np.random.Generator):        
+    # Get true bin's pose in world frame
+    true_bin_instance = plant.GetModelInstanceByName(f"bin{true_bin}")
+    true_bin_body = plant.GetBodyByName("bin_base", true_bin_instance)
+    X_WB = plant.EvalBodyPoseInWorld(plant_context, true_bin_body)
+    
+    # Generate random position and orientation for mustard bottle
+    random_rotation = RollPitchYaw(-np.pi/2, 0, np_rng.uniform(0, 2*np.pi)).ToRotationMatrix()
+
+    # Random XY position within bin bounds, Z height above bin
+    x_offset = -0.01
+    x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
+    y_range = (-0.15, 0.15)  # min, max for y offset from bin center
+    random_z = 0.2  # Height above bin
+
+    random_x = np_rng.uniform(x_range[0], x_range[1])
+    random_y = np_rng.uniform(y_range[0], y_range[1])
+
+    # Visualize the random initialization space as a translucent green box
+    box_width = x_range[1] - x_range[0]   # 0.2m
+    box_depth = y_range[1] - y_range[0]   # 0.2m
+    box_height = 0.02  # Thin box to show the XY region at the drop height
+
+    init_space_box = Box(box_width, box_depth, box_height)
+    meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
+
+    # Position the box at the center of the initialization region (relative to bin)
+    box_center_in_bin = [
+        (x_range[0] + x_range[1]) / 2,  # Center x = 0
+        (y_range[0] + y_range[1]) / 2,  # Center y = 0
+        random_z  # At drop height
+    ]
+    X_WBox = X_WB.multiply(RigidTransform(box_center_in_bin))
+    meshcat.SetTransform("init_space", X_WBox)
+
+    # Create transform relative to bin, then convert to world frame
+    X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
+    X_WM = X_WB.multiply(X_BM)
+
+    # Set mustard bottle pose
+    mustard_body = plant.GetBodyByName("base_link_mustard")
+    plant.SetFreeBodyPose(plant_context, mustard_body, X_WM)
+    
+    print(f"  Placed mustard bottle in bin{true_bin}:")
+    print(f"    Bin position: {X_WB.translation()}")
+    print(f"    Random offset: [{random_x:.3f}, {random_y:.3f}, {random_z:.3f}]")
+    print(f"    World position: {X_WM.translation()}")
+    
+    # Return the world transform so it can be re-applied to other diagrams
+    return X_WM
 
 
 def main():
@@ -139,7 +198,7 @@ def main():
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
     print(
-        f"    > Planner: max_bucket_uncertainty={config.planner.max_bucket_uncertainty}, LightBias={config.planner.bias_prob_sample_q_bucket_light}"
+        f"    > Planner: max_bin_uncertainty={config.planner.max_bin_uncertainty}, LightBias={config.planner.bias_prob_sample_q_bin_light}"
     )
     print()
 
@@ -222,7 +281,10 @@ def main():
 
     q_start = q_home
     
-    plant_context = plant.CreateDefaultContext()
+    # Get the plant context from the simulator's context (not a detached default context)
+    # This ensures SetFreeBodyPose actually affects the simulation
+    sim_context = simulator.get_mutable_context()
+    plant_context = plant.GetMyMutableContextFromRoot(sim_context)
     iiwa = plant.GetModelInstanceByName("iiwa")
 
     # Compute q_goal from tf_goal (task-space goal) using IK
@@ -282,7 +344,7 @@ def main():
         # q_light_hint = np.array(q_home)
         raise RuntimeError("Cannot compute q_light_hint from light_center. Check that the light region is reachable.")
 
-    # problem = IiwaProblemBucketBelief(
+    # problem = IiwaProblembinBelief(
     #     q_start=q_start,
     #     q_goal=q_goal,
     #     gripper_setpoint=0.1,
@@ -291,11 +353,14 @@ def main():
     #     light_size=config.simulation.light_size,
     #     tpr_light=float(config.physics.tpr_light),
     #     fpr_light=float(config.physics.fpr_light),
-    #     n_buckets=int(config.planner.n_buckets),
-    #     true_bucket=int(config.planner.true_bucket),
+    #     n_bins=int(config.planner.n_bins),
+    #     true_bin=int(config.planner.true_bin),
     # )
 
     final_path = None
+    X_WM_mustard = None  # Will store mustard world transform if placed randomly
+    true_bin = None  # Will store randomly chosen bin for RRBT
+    
     if args.planner == "rrt":
         print("Running Standard RRT (two-phase: start → light → goal)...")
         
@@ -345,7 +410,18 @@ def main():
     elif args.planner == "rrbt":
         print("Running RRBT...")
 
-        problem = IiwaProblemBucketBelief(
+        # Randomly choose a true bin
+        true_bin = np.random.randint(0, 2)
+        print(f"Randomly chosen true bin: {true_bin}")
+        
+        # Place mustard bottle randomly in the true bin
+        # Store the world transform to re-apply to execution diagram later
+        X_WM_mustard = place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng)
+        
+        # Force publish to update Meshcat visualization with new mustard position
+        diagram.ForcedPublish(sim_context)
+        
+        problem = IiwaProblemBinBelief(
             q_start=q_start,
             q_goal=q_goal,
             gripper_setpoint=0.1,
@@ -354,10 +430,10 @@ def main():
             light_size=config.simulation.light_size,
             tpr_light=float(config.physics.tpr_light),
             fpr_light=float(config.physics.fpr_light),
-            n_buckets=int(config.planner.n_buckets),
-            true_bucket=int(config.planner.true_bucket),
-            max_bucket_uncertainty=float(config.planner.max_bucket_uncertainty),
-            lambda_weight=float(config.planner.bucket_lambda_weight),
+            n_bins=2,
+            true_bin=true_bin,
+            max_bin_uncertainty=float(config.planner.max_bin_uncertainty),
+            lambda_weight=float(config.planner.bin_lambda_weight),
         )
             
         # Create visualization callback for debugging the belief tree
@@ -368,7 +444,7 @@ def main():
             problem,
             max_iterations=int(config.planner.max_iterations),
             bias_prob_sample_q_goal=float(config.planner.bias_prob_sample_q_goal),
-            bias_prob_sample_q_bucket_light=float(config.planner.bias_prob_sample_q_bucket_light),
+            bias_prob_sample_q_bin_light=float(config.planner.bias_prob_sample_q_bin_light),
             q_light_hint=q_light_hint,
             visualize_callback=None, # Set to tree_viz_callback to see tree grow
             visualize_interval=1000,
@@ -463,10 +539,12 @@ def main():
         
         # Add Belief Estimator System (Discrete Bayes Filter)
         # Receives TPR/FPR sensor model from LightDarkRegionSystem (single source of truth)
+        # Use runtime true_bin if set (RRBT), otherwise fall back to config value (RRT)
+        estimator_true_bin = true_bin if true_bin is not None else int(config.planner.true_bin)
         belief_estimator = exec_builder.AddSystem(
             BeliefEstimatorSystem(
-                n_buckets=int(config.planner.n_buckets),
-                true_bucket=int(config.planner.true_bucket),
+                n_bins=2,
+                true_bin=estimator_true_bin,
             )
         )
         belief_estimator.set_name("BeliefEstimator")
@@ -482,7 +560,7 @@ def main():
         belief_viz = exec_builder.AddSystem(
             BeliefBarChartSystem(
                 meshcat=meshcat,
-                n_buckets=int(config.planner.n_buckets),
+                n_bins=2,
             )
         )
         belief_viz.set_name("BeliefBarChart")
@@ -500,6 +578,15 @@ def main():
         # Create simulator
         exec_simulator = Simulator(exec_diagram)
         exec_simulator.set_target_realtime_rate(1.0)
+        
+        # Re-apply mustard bottle position if it was randomly placed
+        if X_WM_mustard is not None:
+            exec_context = exec_simulator.get_mutable_context()
+            exec_plant_context = exec_plant.GetMyMutableContextFromRoot(exec_context)
+            exec_mustard_body = exec_plant.GetBodyByName("base_link_mustard")
+            exec_plant.SetFreeBodyPose(exec_plant_context, exec_mustard_body, X_WM_mustard)
+            exec_diagram.ForcedPublish(exec_context)
+            print(f"   Re-applied mustard position: {X_WM_mustard.translation()}")
         
         # Setup Meshcat recording
         meshcat.StartRecording()

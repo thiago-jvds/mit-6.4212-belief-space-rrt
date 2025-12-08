@@ -14,7 +14,7 @@ The planner uses RRT*-style anytime behavior:
 """
 
 import numpy as np
-from src.planning.rrt_tools import RRBT_BucketBelief_tools
+from src.planning.rrt_tools import RRBT_BinBelief_tools
 from src.estimation.bayes_filter import calculate_misclassification_risk
 import random
 
@@ -25,7 +25,7 @@ def rrbt_planning(
     problem,
     max_iterations: int = 2000,
     bias_prob_sample_q_goal: float = 0.05,  # Reduced bias since we don't know goal location
-    bias_prob_sample_q_bucket_light: float = 0.4,  # Increased bias to force info gathering
+    bias_prob_sample_q_bin_light: float = 0.4,  # Increased bias to force info gathering
     q_light_hint: np.ndarray = np.array(
         [0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028]
     ),
@@ -58,7 +58,7 @@ def rrbt_planning(
         ((path_to_info, predicted_goal_config), iterations) or (None, iterations)
     """
     # 1. Initialize Tools with lambda_weight
-    tools = RRBT_BucketBelief_tools(
+    tools = RRBT_BinBelief_tools(
         problem,
     )
 
@@ -75,7 +75,7 @@ def rrbt_planning(
         if eps < bias_prob_sample_q_goal:
             # Sample the Prior Mean (Best guess of goal)
             q_rand = problem.goal
-        elif eps < (bias_prob_sample_q_goal + bias_prob_sample_q_bucket_light):
+        elif eps < (bias_prob_sample_q_goal + bias_prob_sample_q_bin_light):
             # Sample the Light Region (To gain info)
             q_rand = tuple(q_light_hint + np.random.uniform(-0.1, 0.1, size=7))
         else:
@@ -119,7 +119,7 @@ def rrbt_planning(
 
         # Visualize progress
         if visualize_callback and (k + 1) % visualize_interval == 0:
-            visualize_callback(tools.rrbt_bucket_belief_tree, k + 1)
+            visualize_callback(tools.rrbt_bin_belief_tree, k + 1)
 
         # Progress report
         if k % 100 == 0:
@@ -133,10 +133,10 @@ def rrbt_planning(
 
     # 5. Final pass: Scan ALL nodes to find the best valid solution
     # This catches any improvements from rewiring that we might have missed
-    print(f"\n   Scanning {len(tools.rrbt_bucket_belief_tree.nodes)} nodes for best solution...")
-    for node in tools.rrbt_bucket_belief_tree.nodes:
+    print(f"\n   Scanning {len(tools.rrbt_bin_belief_tree.nodes)} nodes for best solution...")
+    for node in tools.rrbt_bin_belief_tree.nodes:
         misclass_risk = calculate_misclassification_risk(node.belief)
-        if misclass_risk <= problem.max_bucket_uncertainty and node.cost < best_cost:
+        if misclass_risk <= problem.max_bin_uncertainty and node.cost < best_cost:
             best_node = node
             best_cost = node.cost
 
@@ -161,11 +161,11 @@ def rrbt_planning(
             )
 
         if visualize_callback:
-            visualize_callback(tools.rrbt_bucket_belief_tree, max_iterations)
+            visualize_callback(tools.rrbt_bin_belief_tree, max_iterations)
 
         return (path_to_info, pred_q_goal), max_iterations
     
     # No valid solution found
     print(f"RRBT: No solution found after {max_iterations} iterations.")
-    print(f"   No path achieved misclassification_risk < {max_uncertainty}")
+    print(f"   No path achieved misclassification_risk < {problem.max_bin_uncertainty}")
     return None, max_iterations

@@ -167,7 +167,7 @@ class IiwaProblem(Problem):
                 )
 
 
-class IiwaProblemBucketBelief(IiwaProblem):
+class IiwaProblemBinBelief(IiwaProblem):
     """
     Belief-space planning problem using a discrete 3-bin Bayes filter.
     
@@ -188,93 +188,9 @@ class IiwaProblemBucketBelief(IiwaProblem):
         light_size,
         tpr_light: float = 0.80,
         fpr_light: float = 0.15,
-        n_buckets: int = 3,
-        true_bucket: int = 0,
-    ):
-        """
-        Args:
-            q_start: Starting joint configuration
-            q_goal: Goal joint configuration
-            gripper_setpoint: Gripper opening width
-            meshcat: Meshcat visualizer instance
-            light_center: Center of the light region [x, y, z]
-            light_size: Size of the light region [dx, dy, dz]
-            tpr_light: True Positive Rate in light region (default 0.80)
-            fpr_light: False Positive Rate in light region (default 0.15)
-            n_buckets: Number of discrete hypothesis buckets (default 3)
-            true_bucket: Ground truth bucket index for simulation (default 0)
-        """
-        super().__init__(
-            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
-        )
-
-        # Light region parameters
-        self.light_center = light_center
-        self.light_half = light_size / 2.0
-
-        # --- TPR/FPR SENSOR MODEL (replaces Kalman R matrices) ---
-        # Light region: informative sensor
-        self.tpr_light = tpr_light
-        self.fpr_light = fpr_light
-        
-        # Dark region: uninformative sensor (coin flip, no information gain)
-        self.tpr_dark = 0.5
-        self.fpr_dark = 0.5
-        
-        # --- BUCKET CONFIGURATION ---
-        self.n_buckets = n_buckets
-        self.true_bucket = true_bucket  # Ground truth for simulation
-
-    def is_in_light(self, q: tuple) -> bool:
-        """Check if the gripper (camera) is in the light region."""
-        plant = self.collision_checker.plant
-        context = self.collision_checker.context_plant
-        plant.SetPositions(context, plant.GetModelInstanceByName("iiwa"), np.array(q))
-        camera_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
-        X_Cam = plant.EvalBodyPoseInWorld(context, camera_body)
-        delta = np.abs(X_Cam.translation() - self.light_center)
-        return np.all(delta <= self.light_half)
-
-    def get_sensor_model(self, q: tuple) -> tuple[float, float]:
-        """
-        Get the sensor model (TPR, FPR) based on robot configuration.
-        
-        Args:
-            q: Joint configuration
-            
-        Returns:
-            (tpr, fpr): True Positive Rate and False Positive Rate
-        """
-        if self.is_in_light(q):
-            return self.tpr_light, self.fpr_light
-        else:
-            return self.tpr_dark, self.fpr_dark  # Uninformative
-
-
-class IiwaProblemBucketBelief(IiwaProblem):
-    """
-    Belief-space planning problem using a discrete 3-bin Bayes filter.
-    
-    The sensor model uses TPR (True Positive Rate) and FPR (False Positive Rate)
-    instead of Gaussian noise covariance matrices.
-    
-    In light region: Informative sensor (TPR=0.8, FPR=0.15 by default)
-    In dark region: Uninformative sensor (TPR=0.5, FPR=0.5 - coin flip)
-    """
-    
-    def __init__(
-        self,
-        q_start,
-        q_goal,
-        gripper_setpoint,
-        meshcat,
-        light_center,
-        light_size,
-        tpr_light: float = 0.80,
-        fpr_light: float = 0.15,
-        n_buckets: int = 3,
-        true_bucket: int = 0,
-        max_bucket_uncertainty: float = 0.01,
+        n_bins: int = 2,
+        true_bin: int = 0,
+        max_bin_uncertainty: float = 0.01,
         lambda_weight: float = 1.0
     ):
         """
@@ -287,8 +203,8 @@ class IiwaProblemBucketBelief(IiwaProblem):
             light_size: Size of the light region [dx, dy, dz]
             tpr_light: True Positive Rate in light region (default 0.80)
             fpr_light: False Positive Rate in light region (default 0.15)
-            n_buckets: Number of discrete hypothesis buckets (default 3)
-            true_bucket: Ground truth bucket index for simulation (default 0)
+            n_bins: Number of discrete hypothesis bins (default 3)
+            true_bin: Ground truth bin index for simulation (default 0)
         """
         super().__init__(
             q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
@@ -307,10 +223,10 @@ class IiwaProblemBucketBelief(IiwaProblem):
         self.tpr_dark = 0.5
         self.fpr_dark = 0.5
         
-        # --- BUCKET CONFIGURATION ---
-        self.n_buckets = n_buckets
-        self.true_bucket = true_bucket  # Ground truth for simulation
-        self.max_bucket_uncertainty = max_bucket_uncertainty
+        # --- bins CONFIGURATION ---
+        self.n_bins = n_bins
+        self.true_bin = true_bin  # Ground truth for simulation
+        self.max_bin_uncertainty = max_bin_uncertainty
         self.lambda_weight = lambda_weight
 
     def is_in_light(self, q: tuple) -> bool:
@@ -340,7 +256,7 @@ class IiwaProblemBucketBelief(IiwaProblem):
     
     def node_reaches_goal(self, node, tol=None):
         misclass_risk = calculate_misclassification_risk(node.belief)
-        if misclass_risk <= self.max_bucket_uncertainty:
+        if misclass_risk <= self.max_bin_uncertainty:
             return True
         return False
     

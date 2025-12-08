@@ -3,7 +3,7 @@ RRBT Tree - Rapidly-exploring Random Belief Tree
 
 This implements belief-space RRT with a discrete 3-bin Bayes filter.
 The belief state is a probability vector [P(A), P(B), P(C)] representing
-the probability that the object is in each bucket.
+the probability that the object is in each bin.
 
 Cost Function: cost = path_length + λ × misclassification_risk
 Termination:   misclassification_risk < max_uncertainty
@@ -19,10 +19,10 @@ This ensures:
 from collections import deque
 from manipulation.exercises.trajectories.rrt_planner.rrt_planning import TreeNode
 import numpy as np
-from src.simulation.simulation_tools import IiwaProblemBucketBelief
+from src.simulation.simulation_tools import IiwaProblemBinBelief
 from src.estimation.bayes_filter import (
     calculate_misclassification_risk,
-    expected_posterior_all_buckets,
+    expected_posterior_all_bins,
 )
 
 
@@ -47,7 +47,7 @@ class BeliefNode(TreeNode):
         self.cost = cost  # Combined: path_length + λ × misclassification_risk
 
 
-class RRBT_BucketBelief_Tree:
+class RRBT_BinBelief_Tree:
     """
     Rapidly-exploring Random Belief Tree with discrete Bayes filter.
     
@@ -71,11 +71,11 @@ class RRBT_BucketBelief_Tree:
         self.cspace = problem.cspace
 
         # Goal threshold for termination check
-        self.GOAL_THRESHOLD = problem.max_bucket_uncertainty
+        self.GOAL_THRESHOLD = problem.max_bin_uncertainty
 
         # Initialize Root with UNIFORM PRIOR (maximum uncertainty)
-        n_buckets = problem.n_buckets
-        init_belief = np.ones(n_buckets) / n_buckets  # e.g. [1/2, 1/2]
+        n_bins = problem.n_bins
+        init_belief = np.ones(n_bins) / n_bins  # e.g. [1/2, 1/2]
         init_cost = self.problem.cost_function(0.0, init_belief)
         
         self.root = BeliefNode(
@@ -110,9 +110,9 @@ class RRBT_BucketBelief_Tree:
         """
         Propagate belief from parent_node to q_target using discrete Bayes filter.
         
-        In light region: Uses expected_posterior_all_buckets() to compute
-                        expected belief after measuring all 3 buckets,
-                        assuming the object is in true_bucket (for planning)
+        In light region: Uses expected_posterior_all_bins() to compute
+                        expected belief after measuring all 3 bins,
+                        assuming the object is in true_bin (for planning)
         In dark region: Belief unchanged (uninformative measurements)
         
         Returns dict with:
@@ -127,11 +127,11 @@ class RRBT_BucketBelief_Tree:
 
         # Update belief based on light/dark region
         if self.problem.is_in_light(q_target):
-            # In light: measure all buckets (expected posterior for planning)
-            # We assume the object is in true_bucket for computing expected posterior
-            belief_new = expected_posterior_all_buckets(
+            # In light: measure all bins (expected posterior for planning)
+            # We assume the object is in true_bin for computing expected posterior
+            belief_new = expected_posterior_all_bins(
                 belief_parent, tpr, fpr, 
-                assumed_bucket=self.problem.true_bucket
+                assumed_bin=self.problem.true_bin
             )
         else:
             # In dark: uninformative measurements, belief unchanged

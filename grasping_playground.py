@@ -1072,36 +1072,36 @@ def main():
     print("\n" + "-" * 40)
     print("Phase 0: Randomizing mustard bottle position above bin0...")
     print("-" * 40)
-    
+
     # Get bin0's pose in world frame
     bin0_instance = plant.GetModelInstanceByName("bin0")
     bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
     X_WB = plant.EvalBodyPoseInWorld(plant_context, bin0_body)
-    
+
     # Generate random position and orientation for mustard bottle
     generator = RandomGenerator(rng.integers(1000))  # C++ random generator
     # random_rotation = UniformlyRandomRotationMatrix(generator)
-    
+
     # generate random value from 0 to 2pi for the rotation around the z
     random_rotation = RollPitchYaw(-np.pi/2, 0, np.random.uniform(0, 2*np.pi)).ToRotationMatrix()
-    
+
     # Random XY position within bin bounds, Z height above bin
     x_offset = -0.01
     x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
     y_range = (-0.15, 0.15)  # min, max for y offset from bin center
     random_z = 0.2  # Height above bin
-    
+
     random_x = rng.uniform(x_range[0], x_range[1])
     random_y = rng.uniform(y_range[0], y_range[1])
-    
+
     # Visualize the random initialization space as a translucent green box
     box_width = x_range[1] - x_range[0]   # 0.2m
     box_depth = y_range[1] - y_range[0]   # 0.2m
     box_height = 0.02  # Thin box to show the XY region at the drop height
-    
+
     init_space_box = Box(box_width, box_depth, box_height)
     meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
-    
+
     # Position the box at the center of the initialization region (relative to bin)
     box_center_in_bin = [
         (x_range[0] + x_range[1]) / 2,  # Center x = 0
@@ -1110,17 +1110,17 @@ def main():
     ]
     X_WBox = X_WB.multiply(RigidTransform(box_center_in_bin))
     meshcat.SetTransform("init_space", X_WBox)
-    
+
     print(f"  Initialization space: x=[{x_range[0]}, {x_range[1]}], y=[{y_range[0]}, {y_range[1]}], z={random_z}")
-    
+
     # Create transform relative to bin, then convert to world frame
     X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
     X_WM = X_WB.multiply(X_BM)
-    
+
     # Set mustard bottle pose
     mustard_body = plant.GetBodyByName("base_link_mustard")
     plant.SetFreeBodyPose(plant_context, mustard_body, X_WM)
-    
+
     print(f"  Bin0 position: {X_WB.translation()}")
     print(f"  Mustard random offset: [{random_x:.3f}, {random_y:.3f}, {random_z:.3f}]")
     print(f"  Mustard world position: {X_WM.translation()}")

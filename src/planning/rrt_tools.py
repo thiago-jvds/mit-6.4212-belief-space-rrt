@@ -4,7 +4,7 @@ from manipulation.exercises.trajectories.rrt_planner.rrt_planning import (
 )
 from src.simulation.simulation_tools import IiwaProblem
 import numpy as np
-from src.planning.rrbt_tree import RRBT_BucketBelief_Tree
+from src.planning.rrbt_tree import RRBT_BinBelief_Tree
 
 
 class RRT_tools:
@@ -53,13 +53,13 @@ class RRT_tools:
         path.reverse()
         return path
 
-class RRBT_BucketBelief_tools(RRT_tools):
+class RRBT_BinBelief_tools(RRT_tools):
     def __init__(
         self, 
         problem
     ) -> None:
         self.problem = problem
-        self.rrbt_bucket_belief_tree = RRBT_BucketBelief_Tree(
+        self.rrbt_bin_belief_tree = RRBT_BinBelief_Tree(
             problem
         )
 
@@ -69,10 +69,10 @@ class RRBT_BucketBelief_tools(RRT_tools):
 
     def extend_towards(self, q_rand):
         dists = [
-            self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_bucket_belief_tree.nodes
+            self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_bin_belief_tree.nodes
         ]
         nearest_idx = np.argmin(dists)
-        node_near = self.rrbt_bucket_belief_tree.nodes[nearest_idx]
+        node_near = self.rrbt_bin_belief_tree.nodes[nearest_idx]
 
         qs = self.calc_intermediate_qs_wo_collision(node_near.value, q_rand)
         if not qs:
@@ -80,8 +80,8 @@ class RRBT_BucketBelief_tools(RRT_tools):
 
         curr_parent = node_near
         for q_next in qs:
-            neighbors = self.rrbt_bucket_belief_tree.get_nearest_neighbors(q_next, k=10)
-            new_node = self.rrbt_bucket_belief_tree.InsertNode(q_next, neighbors, curr_parent)
+            neighbors = self.rrbt_bin_belief_tree.get_nearest_neighbors(q_next, k=10)
+            new_node = self.rrbt_bin_belief_tree.InsertNode(q_next, neighbors, curr_parent)
             if new_node is None:
                 break
             curr_parent = new_node
@@ -106,16 +106,16 @@ class RRBT_BucketBelief_tools(RRT_tools):
         """
         Simulate the 'Commitment' step.
         Now that uncertainty is low, we use the MAP (Maximum A Posteriori)
-        estimate to select which bucket the object is in.
+        estimate to select which bin the object is in.
         
         For now, we still return the true goal configuration since
-        the buckets are abstract and will be grounded later.
+        the bins are abstract and will be grounded later.
         """
-        # Get the MAP estimate (bucket with highest probability)
-        map_bucket = np.argmax(node.belief)
+        # Get the MAP estimate (bin with highest probability)
+        map_bin = np.argmax(node.belief)
         
         # For now, return the true goal configuration
-        # Later this will be grounded to the specific bucket's configuration
+        # Later this will be grounded to the specific bin's configuration
         true_goal = np.array(self.problem.goal)
         pred_q_goal = true_goal
 

@@ -1,4 +1,5 @@
 import yaml
+import json
 import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,9 +31,6 @@ def load_rrbt_config(filename="config.yaml"):
         config = yaml.safe_load(f)
 
     # Convert specific lists to numpy arrays for convenience
-    if "planner" in config and "q_light_hint" in config["planner"]:
-        config["planner"]["q_light_hint"] = np.array(config["planner"]["q_light_hint"])
-
     if "simulation" in config:
         config["simulation"]["light_center"] = np.array(
             config["simulation"]["light_center"]
@@ -42,5 +40,16 @@ def load_rrbt_config(filename="config.yaml"):
         )
         config["simulation"]["q_home"] = np.array(config["simulation"]["q_home"])
         config["simulation"]["q_goal"] = np.array(config["simulation"]["q_goal"])
+
+    # Convert camera pose to numpy arrays if present
+    if "visualization" in config:
+        if "camera_position" in config["visualization"]:
+            config["visualization"]["camera_position"] = np.array(
+                config["visualization"]["camera_position"]
+            )
+        if "camera_target" in config["visualization"]:
+            config["visualization"]["camera_target"] = np.array(
+                config["visualization"]["camera_target"]
+            )
 
     return NestedNamespace(config)

@@ -42,6 +42,8 @@ from src.simulation.sim_setup import (
 from src.visualization.belief_visualizer import BeliefVisualizerSystem
 from src.estimation.belief_estimator import BeliefEstimatorSystem
 from src.utils.config_loader import load_rrbt_config
+from src.utils.camera_pose_manager import restore_camera_pose
+from src.utils.ik_solver import solve_ik_for_pose
 
 
 def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewisePolynomial:
@@ -143,6 +145,10 @@ def main():
             "  Please stop any other Meshcat servers or Python processes using that port."
         )
         raise
+
+    # Restore saved camera pose if available (only if visualization is enabled)
+    if args.visualize == "True":
+        restore_camera_pose(meshcat)
 
     scenario_path = Path(__file__).parent / "config" / "scenario.yaml"
 
@@ -246,6 +252,34 @@ def main():
     elif args.planner == "rrbt":
         print("Running RRBT...")
 
+        # Calculate q_light_hint from light_center using IK
+        # Create a target pose at the light center for information gathering
+        light_center = config.simulation.light_center
+        # Use a reasonable orientation (gripper pointing towards light center)
+        target_rotation = RotationMatrix.MakeXRotation(np.pi) @ RotationMatrix.MakeZRotation(-np.pi / 2)
+        X_WG_light = RigidTransform(target_rotation, light_center)
+        
+        print(f"Computing q_light_hint from light_center {light_center}...")
+        try:
+            q_light_hint = solve_ik_for_pose(
+                plant=plant,
+                X_WG_target=X_WG_light,
+                q_nominal=tuple(q_home),
+                theta_bound=0.1,  # Relaxed orientation tolerance
+                pos_tol=0.05,     # 5cm position tolerance
+            )
+            q_light_hint = np.array(q_light_hint)
+            print(f"✓ q_light_hint computed: {q_light_hint}")
+            
+            # Visualize the light region sampling pose in Meshcat
+            if args.visualize == "True":
+                AddMeshcatTriad(meshcat, "light_region_sampling_pose", length=0.15, radius=0.004)
+                meshcat.SetTransform("light_region_sampling_pose", X_WG_light)
+                print(f"  Visualized light region sampling pose in Meshcat")
+        except RuntimeError as e:
+            print(f"⚠ IK failed for light_center, using q_home as fallback: {e}")
+            q_light_hint = np.array(q_home)
+
         # Create visualization callback for debugging the belief tree
         def tree_viz_callback(rrbt_tree, iteration):
             visualize_belief_tree(rrbt_tree, problem, meshcat, iteration)
@@ -257,9 +291,10 @@ def main():
             prob_sample_q_light=float(config.planner.prob_sample_light),
             max_uncertainty=float(config.planner.max_uncertainty),
             lambda_weight=float(config.planner.lambda_weight),
-            q_light_hint=np.array(config.planner.q_light_hint),
+            q_light_hint=q_light_hint,
             visualize_callback=None, # Set to tree_viz_callback to see tree grow
-            visualize_interval=1000
+            visualize_interval=1000,
+            verbose=False
         )
 
         if rrbt_result:
@@ -402,8 +437,6 @@ def main():
         print("✗ No path found.")
 
     print("\nSimulation complete. Press Ctrl+C to exit.")
-    while True:
-        time.sleep(0.1)
 
 
 if __name__ == "__main__":

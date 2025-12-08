@@ -118,16 +118,19 @@ class RRBT_tools(RRT_tools):
     def sample_final_goal(self, node):
         """
         Simulate the 'Commitment' step.
-        Now that uncertainty is low, we sample a specific goal configuration
-        from the belief distribution.
+        Now that uncertainty is low, we use the mean of our belief distribution
+        as the best estimate of the goal configuration.
         """
         # Mean = The True Goal (Simulation of the estimator converging)
-        # Covariance = The Node's Belief (sigma)
-
+        # This is our best estimate given the information we've gathered
         true_goal = np.array(self.problem.goal)
-        belief_sigma = node.sigma
 
-        # Sample from N(TrueGoal, Sigma)
-        pred_q_goal = np.random.multivariate_normal(true_goal, belief_sigma)
+        # Use the mean (best estimate) instead of sampling
+        # This ensures we use a valid configuration and represents our best guess
+        pred_q_goal = true_goal
+        
+        # TODO: re-add proper sampling from the belief distribution like:
+        # pred_q_goal = np.random.multivariate_normal(true_goal, belief_sigma)
+
 
         return pred_q_goal

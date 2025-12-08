@@ -18,7 +18,7 @@ physics:
   safety_buffer_radius: 0.08
 
 planner:
-  max_iterations: 10000
+  max_iterations: 100
 
   # INITIAL BELIEF: We start knowing very little about the target.
   # Trace(Sigma) = 7.0 (High uncertainty)
@@ -37,4 +37,9 @@ planner:
   # Biases
   prob_sample_goal: 0.5
   prob_sample_light: 0.5
-  q_light_hint: [ 0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028 ]
+
+# Visualization settings
+visualization:
+  # Camera pose for Meshcat viewport
+  camera_position: [ -0.66052837, -0.68944092, 1.09457347 ]
+  camera_target: [ 0.3, 0.3, 0.0 ]

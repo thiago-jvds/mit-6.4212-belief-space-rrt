@@ -38,6 +38,12 @@ from src.utils.config_loader import load_rrbt_config
 from src.planning.standard_rrt import rrt_planning
 from src.simulation.simulation_tools import IiwaProblem
 from src.utils.ik_solver import solve_ik_for_pose
+from src.utils.camera_pose_manager import (
+    restore_camera_pose,
+    save_camera_pose,
+    poll_and_save_camera_pose,
+)
+import argparse
 
 
 def path_to_trajectory(path: list, time_per_segment: float = 0.1) -> PiecewisePolynomial:
@@ -1443,6 +1449,19 @@ def visualize_camera_frustum(
 
 
 def main():
+    parser = argparse.ArgumentParser(description="MIT 6.4212 Observation Model Testing")
+    parser.add_argument(
+        "--save-camera",
+        action="store_true",
+        help="Save the current camera pose (requires ?tracked_camera=on in Meshcat URL)",
+    )
+    parser.add_argument(
+        "--poll-camera",
+        action="store_true",
+        help="Continuously poll and save camera pose as you move it in Meshcat",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("MIT 6.4212 - Observation Model Testing")
     print("Robot Scenario Visualization with Wrist Camera")
@@ -1462,7 +1481,7 @@ def main():
         params = MeshcatParams()
         params.port = 7000
         meshcat = Meshcat(params=params)
-        print("✓ Meshcat started on http://localhost:7000")
+        print(f"✓ Meshcat started on {meshcat.web_url()}")
     except RuntimeError as e:
         print("\n✗ ERROR: Could not start Meshcat on port 7000")
         print(f"  {e}")
@@ -1471,6 +1490,30 @@ def main():
             "  Please stop any other Meshcat servers or Python processes using that port."
         )
         raise
+    
+    # Handle camera pose saving (one-time save, can be done early)
+    if args.save_camera:
+        print("\nSaving current camera pose...")
+        if save_camera_pose(meshcat):
+            print("  Camera pose saved successfully!")
+        else:
+            print("  Failed to save camera pose.")
+            print("  Make sure you opened Meshcat with ?tracked_camera=on in the URL")
+            print(f"  Example: {meshcat.web_url()}?tracked_camera=on")
+        return
+    
+    # Restore saved camera pose if available
+    print("\nAttempting to restore saved camera pose...")
+    if restore_camera_pose(meshcat):
+        print("  Camera pose restored from config/config.yaml")
+    else:
+        print("  No saved camera pose found (this is OK for first run)")
+        print("\n  To save a camera pose:")
+        print("    1. Open Meshcat with ?tracked_camera=on in the URL:")
+        print(f"       {meshcat.web_url()}?tracked_camera=on")
+        print("    2. Move the camera to your desired position")
+        print("    3. Run obs_model_testing.py with --save-camera flag to save the current pose")
+        print("    4. Or use --poll-camera to continuously save as you move it")
 
     # Load the observation modeling scenario (with wrist camera enabled)
     scenario_path = Path(__file__).parent / "config" / "obs_modeling_scenario.yaml"
@@ -2082,6 +2125,17 @@ def main():
         # Close camera visualizer windows
         camera_visualizer.close()
         print("  Camera visualizer closed.")
+    
+    # Handle camera pose polling AFTER algorithm and visualization complete
+    if args.poll_camera:
+        print("\n" + "=" * 60)
+        print("CAMERA POSE POLLING")
+        print("=" * 60)
+        print("Algorithm and visualization complete.")
+        print("Starting camera pose polling...")
+        print("Move the camera in Meshcat to save its pose.")
+        print("=" * 60 + "\n")
+        poll_and_save_camera_pose(meshcat, interval_seconds=1.0)
 
 
 if __name__ == "__main__":

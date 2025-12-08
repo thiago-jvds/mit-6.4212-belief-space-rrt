@@ -1,11 +1,11 @@
 simulation:
-  light_center: [ -0.5, 1.0, 0.5 ]
+  light_center: [ 0.0, 1.0, 0.5 ]
   light_size: [ 0.25, 0.25, 0.25 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   # Goal specified as end-effector pose in world frame
   # Much easier to reason about than 7D joint configuration
   tf_goal:
-    translation: [ 0.2, 0.0, 0.3 ]   # [x, y, z] position in meters
+    translation: [ 0.75, 0.0, 0.4 ]   # [x, y, z] position in meters
     rpy: [ 0.0, 3.14159, -1.5708 ]   # [roll, pitch, yaw] Euler angles in radians (X-Y-Z)
 
 physics:

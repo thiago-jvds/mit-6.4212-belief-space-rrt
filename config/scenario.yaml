@@ -17,7 +17,7 @@ directives:
     parent: world
     child: iiwa::iiwa_link_0
     X_PC:
-      translation: [ -0.5, 0, 0 ]
+      translation: [ 0.0, 0.0, 0.0 ]
 
 # 3. Add the WSG Gripper
 - add_model:
@@ -32,7 +32,42 @@ directives:
       translation: [ 0, 0, 0.09 ]
       rotation: !Rpy { deg: [ 90, 0, 90 ] }
 
-# 5. Add the Bookshelf
+# 5. Add the Floor
+- add_model:
+    name: floor
+    file: package://manipulation/floor.sdf
+
+- add_weld:
+    parent: world
+    child: floor::box
+    X_PC:
+      translation: [ 0, 0, -0.1 ]  # Floor top surface at z=-0.05 (below robot base)
+
+# 6. Add the Manipulation Bin
+- add_model:
+    name: bin
+    file: package://drake_models/manipulation_station/bin.sdf
+
+- add_weld:
+    parent: world
+    child: bin::bin_base
+    X_PC:
+      translation: [ 0.0, -0.7, 0.0 ]  # On the opposite side of robot from table
+      rotation: !Rpy { deg: [ 0, 0, 90 ] }
+
+# 6b. Add a Second Manipulation Bin
+- add_model:
+    name: bin2
+    file: package://drake_models/manipulation_station/bin.sdf
+
+- add_weld:
+    parent: world
+    child: bin2::bin_base
+    X_PC:
+      translation: [ 0.7, 0.0, 0.0 ]
+      rotation: !Rpy { deg: [ 0, 0, -180 ] }
+
+# 7. Add the Bookshelf
 - add_model:
     name: shelves
     file: package://manipulation/shelves.sdf
@@ -42,11 +77,11 @@ directives:
     child: shelves::shelves_body
     X_PC:
       # translation: [ 0.5, 0, 0.3995 ]
-      translation: [ 0.65, 0, 0.3995 ]
+      translation: [ 3.0, 0, 0.3995 ]
       # translation: [ 10.0, 10.0, 0.3995 ]
       rotation: !Rpy { deg: [ 0, 0, 180 ] }
 
-# 6. Add the Target Object
+# 8. Add the Target Object
 # We place it on the shelf
 - add_model:
     name: target_object
@@ -59,7 +94,7 @@ directives:
       translation: [ 0.1, 0, 0 ]
       rotation: !Rpy { deg: [ -90, 0, -90 ] }
 
-# 7. Add the Camera (Physical Body)
+# 9. Add the Camera (Physical Body)
 # We weld a camera box to the top of last link 
 # so it moves with the hand
 # - add_model:
@@ -73,7 +108,7 @@ directives:
 #       translation: [ -0.095, 0, 0 ] # Mounted slightly "above" the gripper (in gripper frame)
 #       rotation: !Rpy { deg: [ -180, 180, 90 ] } # Looking forward
 
-# # 8. Define the Sensors
+# # 11. Define the Sensors
 # # This tells Drake to render images from the camera body we just added
 # cameras:
 #   wrist_camera_sensor:

@@ -26,6 +26,7 @@ from pydrake.all import (
     Rgba,
     RigidTransform,
     RotationMatrix,
+    RollPitchYaw,
     PiecewisePolynomial,
     TrajectorySource,
 )
@@ -211,22 +212,66 @@ def main():
     print("=" * 40)
 
     q_start = q_home
-    q_goal = config.simulation.q_goal
-
+    
     plant_context = plant.CreateDefaultContext()
     iiwa = plant.GetModelInstanceByName("iiwa")
 
-    # 2. Set the plant to q_goal
-    plant.SetPositions(plant_context, iiwa, q_goal)
+    # Compute q_goal from tf_goal (task-space goal) using IK
+    tf_goal = config.simulation.tf_goal
+    X_WG_goal = RigidTransform(
+        RollPitchYaw(tf_goal.rpy).ToRotationMatrix(),
+        tf_goal.translation
+    )
+    
+    print(f"Computing q_goal from tf_goal:")
+    print(f"  translation: {tf_goal.translation}")
+    print(f"  rpy: {tf_goal.rpy}")
+    
+    try:
+        q_goal = solve_ik_for_pose(
+            plant=plant,
+            X_WG_target=X_WG_goal,
+            q_nominal=tuple(q_home),
+            theta_bound=0.1,  # Relaxed orientation tolerance
+            pos_tol=0.01,     # 1cm position tolerance
+        )
+        q_goal = np.array(q_goal)
+        print(f"✓ q_goal computed: {q_goal}")
+    except RuntimeError as e:
+        print(f"✗ IK failed for tf_goal: {e}")
+        raise RuntimeError("Cannot compute q_goal from tf_goal. Check that the goal pose is reachable.")
 
-    # 3. Calculate Pose of the Gripper (wsg body)
-    # Note: Ensure "body" is the correct link name for your gripper in the SDF
-    wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
-    X_Goal = plant.EvalBodyPoseInWorld(plant_context, wsg_body)
-
-    # 4. Draw the Triad
+    # Visualize the goal pose
     AddMeshcatTriad(meshcat, "goal_pose", length=0.2, radius=0.005)
-    meshcat.SetTransform("goal_pose", X_Goal)
+    meshcat.SetTransform("goal_pose", X_WG_goal)
+
+    # Calculate q_light_hint from light_center using IK (shared by both planners)
+    # This creates a waypoint in the light region for better observation
+    light_center = config.simulation.light_center
+    target_rotation = RotationMatrix.MakeXRotation(np.pi) @ RotationMatrix.MakeZRotation(np.pi)
+    X_WG_light = RigidTransform(target_rotation, light_center)
+    
+    print(f"Computing q_light_hint from light_center {light_center}...")
+    try:
+        q_light_hint = solve_ik_for_pose(
+            plant=plant,
+            X_WG_target=X_WG_light,
+            q_nominal=tuple(q_home),
+            theta_bound=0.1,  # Relaxed orientation tolerance
+            pos_tol=0.05,     # 5cm position tolerance
+        )
+        q_light_hint = np.array(q_light_hint)
+        print(f"✓ q_light_hint computed: {q_light_hint}")
+        
+        # Visualize the light region sampling pose in Meshcat
+        if args.visualize == "True":
+            AddMeshcatTriad(meshcat, "light_region_sampling_pose", length=0.15, radius=0.004)
+            meshcat.SetTransform("light_region_sampling_pose", X_WG_light)
+            print(f"  Visualized light region sampling pose in Meshcat")
+    except RuntimeError as e:
+        print(f"⚠ IK failed for light_center, using q_home as fallback: {e}")
+        # q_light_hint = np.array(q_home)
+        raise RuntimeError("Cannot compute q_light_hint from light_center. Check that the light region is reachable.")
 
     problem = IiwaProblemBelief(
         q_start=q_start,
@@ -241,44 +286,53 @@ def main():
 
     final_path = None
     if args.planner == "rrt":
-        print("Running Standard RRT...")
-        path, k = rrt_planning(
-            problem,
+        print("Running Standard RRT (two-phase: start → light → goal)...")
+        
+        # Phase 1: RRT from q_start to q_light_hint (information gathering waypoint)
+        print("\n  Phase 1: Planning path to light region...")
+        problem_to_light = IiwaProblem(
+            q_start=q_start,
+            q_goal=tuple(q_light_hint),
+            gripper_setpoint=0.1,
+            meshcat=meshcat,
+        )
+        path_to_light, k1 = rrt_planning(
+            problem_to_light,
             max_iterations=config.planner.max_iterations,
             prob_sample_q_goal=float(config.planner.prob_sample_goal),
         )
-        if path:
-            final_path = path
+        
+        if path_to_light:
+            print(f"  ✓ Phase 1 complete: {len(path_to_light)} waypoints, {k1} iterations")
+            
+            # Phase 2: RRT from q_light_hint to q_goal
+            print("\n  Phase 2: Planning path from light region to goal...")
+            problem_to_goal = IiwaProblem(
+                q_start=path_to_light[-1],  # Start from end of first path
+                q_goal=q_goal,
+                gripper_setpoint=0.1,
+                meshcat=meshcat,
+            )
+            path_to_goal, k2 = rrt_planning(
+                problem_to_goal,
+                max_iterations=config.planner.max_iterations,
+                prob_sample_q_goal=0.25,  # Higher bias for goal-directed motion
+            )
+            
+            if path_to_goal:
+                print(f"  ✓ Phase 2 complete: {len(path_to_goal)} waypoints, {k2} iterations")
+                # Combine paths (avoid duplicating the junction point)
+                final_path = path_to_light + path_to_goal[1:]
+                print(f"✓ Two-phase RRT complete: {len(final_path)} total waypoints")
+            else:
+                print("  ✗ Phase 2 failed (could not reach goal from light region)")
+                final_path = path_to_light  # At least visualize the path to light
+        else:
+            print("  ✗ Phase 1 failed (could not reach light region)")
+            final_path = None
+            
     elif args.planner == "rrbt":
         print("Running RRBT...")
-
-        # Calculate q_light_hint from light_center using IK
-        # Create a target pose at the light center for information gathering
-        light_center = config.simulation.light_center
-        # Use a reasonable orientation (gripper pointing towards light center)
-        target_rotation = RotationMatrix.MakeXRotation(np.pi) @ RotationMatrix.MakeZRotation(-np.pi / 2)
-        X_WG_light = RigidTransform(target_rotation, light_center)
-        
-        print(f"Computing q_light_hint from light_center {light_center}...")
-        try:
-            q_light_hint = solve_ik_for_pose(
-                plant=plant,
-                X_WG_target=X_WG_light,
-                q_nominal=tuple(q_home),
-                theta_bound=0.1,  # Relaxed orientation tolerance
-                pos_tol=0.05,     # 5cm position tolerance
-            )
-            q_light_hint = np.array(q_light_hint)
-            print(f"✓ q_light_hint computed: {q_light_hint}")
-            
-            # Visualize the light region sampling pose in Meshcat
-            if args.visualize == "True":
-                AddMeshcatTriad(meshcat, "light_region_sampling_pose", length=0.15, radius=0.004)
-                meshcat.SetTransform("light_region_sampling_pose", X_WG_light)
-                print(f"  Visualized light region sampling pose in Meshcat")
-        except RuntimeError as e:
-            print(f"⚠ IK failed for light_center, using q_home as fallback: {e}")
-            q_light_hint = np.array(q_home)
 
         # Create visualization callback for debugging the belief tree
         def tree_viz_callback(rrbt_tree, iteration):
@@ -404,7 +458,7 @@ def main():
             BeliefVisualizerSystem(
                 meshcat=meshcat,
                 plant=exec_plant,
-                goal_config=config.simulation.q_goal,
+                goal_config=q_goal,  # Use computed q_goal from tf_goal
             )
         )
         belief_viz.set_name("BeliefVisualizer")

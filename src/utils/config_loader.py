@@ -1,5 +1,4 @@
 import yaml
-import json
 import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,7 +38,16 @@ def load_rrbt_config(filename="config.yaml"):
             config["simulation"]["light_size"]
         )
         config["simulation"]["q_home"] = np.array(config["simulation"]["q_home"])
-        config["simulation"]["q_goal"] = np.array(config["simulation"]["q_goal"])
+        
+        # Parse tf_goal (task-space goal) if present
+        if "tf_goal" in config["simulation"]:
+            tf_goal = config["simulation"]["tf_goal"]
+            tf_goal["translation"] = np.array(tf_goal["translation"])
+            tf_goal["rpy"] = np.array(tf_goal["rpy"])
+        
+        # Legacy support: convert q_goal if present (optional fallback)
+        if "q_goal" in config["simulation"]:
+            config["simulation"]["q_goal"] = np.array(config["simulation"]["q_goal"])
 
     # Convert camera pose to numpy arrays if present
     if "visualization" in config:

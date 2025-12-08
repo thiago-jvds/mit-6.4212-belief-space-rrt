@@ -30,6 +30,7 @@ else:
     matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
+from manipulation.meshcat_utils import AddMeshcatTriad
 from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
 from manipulation.icp import IterativeClosestPoint
 from manipulation.mustard_depth_camera_example import MustardPointCloud
@@ -1008,11 +1009,7 @@ def main():
                 
                 # Visualize as a triad (coordinate frame) in Meshcat
                 # Red = X (finger close direction), Green = Y (approach, pointing down), Blue = Z
-                meshcat.SetTriad(
-                    path="pre_grasp_pose",
-                    length=0.1,      # 10cm axes
-                    radius=0.005     # 5mm thick
-                )
+                AddMeshcatTriad(meshcat, "pre_grasp_pose", length=0.2, radius=0.005)
                 meshcat.SetTransform("pre_grasp_pose", X_pregrasp)
                 
                 # Also draw a gripper at the pre-grasp pose for visualization

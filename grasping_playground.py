@@ -559,7 +559,7 @@ def GenerateAntipodalGraspCandidateDebug(
         return np.inf, None, "collision_cloud"
 
 
-def select_best_grasp(meshcat, cloud, rng, num_candidates=100, debug=False):
+def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, debug=False):
     """
     Sample grasp candidates and select the best one.
     
@@ -637,10 +637,10 @@ def select_best_grasp(meshcat, cloud, rng, num_candidates=100, debug=False):
     indices = np.asarray(costs).argsort()
     
     # Draw top 5 grasps (or fewer if we have less)
-    num_to_draw = min(5, len(indices))
-    print(f"\n  Drawing top {num_to_draw} grasp candidates:")
+    top_k_to_draw = min(num_to_draw, len(indices))
+    print(f"\n  Drawing top {top_k_to_draw} grasp candidates:")
     
-    for rank in range(num_to_draw):
+    for rank in range(top_k_to_draw):
         idx = indices[rank]
         print(f"    {rank+1}. Cost: {costs[idx]:.3f}")
         draw_grasp_candidate(meshcat, X_Gs[idx], prefix=f"grasp_{rank+1}_best")
@@ -741,8 +741,8 @@ def main():
     random_rotation = UniformlyRandomRotationMatrix(generator)
     
     # Random XY position within bin bounds, Z height above bin
-    random_x = rng.uniform(-0.15, 0.15)
-    random_y = rng.uniform(-0.2, 0.2)
+    random_x = rng.uniform(-0.1, 0.1)
+    random_y = rng.uniform(-0.1, 0.1)
     random_z = 0.25  # Height above bin
     
     # Create transform relative to bin, then convert to world frame
@@ -878,67 +878,67 @@ def main():
             rgba=Rgba(0, 1, 0, 1)  # Green
         )
         
-        # Generate model point cloud
-        print("\n" + "-" * 40)
-        print("Phase 4: Running ICP pose estimation...")
-        print("-" * 40)
+        # # Generate model point cloud
+        # print("\n" + "-" * 40)
+        # print("Phase 4: Running ICP pose estimation...")
+        # print("-" * 40)
         
-        model_pcl = get_mustard_bottle_model_pointcloud()
-        print(f"  Model has {model_pcl.shape[1]} points (from actual mesh)")
+        # model_pcl = get_mustard_bottle_model_pointcloud()
+        # print(f"  Model has {model_pcl.shape[1]} points (from actual mesh)")
         
-        # Visualize model point cloud at origin (blue)
-        meshcat.SetObject(
-            "pcl_model_origin",
-            ToPointCloud(model_pcl),
-            rgba=Rgba(0, 0, 1, 0.5)  # Blue, semi-transparent
-        )
+        # # Visualize model point cloud at origin (blue)
+        # meshcat.SetObject(
+        #     "pcl_model_origin",
+        #     ToPointCloud(model_pcl),
+        #     rgba=Rgba(0, 0, 1, 0.5)  # Blue, semi-transparent
+        # )
         
-        # Initial guess: center of segmented points, with some reasonable orientation
-        # The bottle is lying on its side in the bin
-        centroid = np.mean(segmented_xyz, axis=1)
-        initial_guess = RigidTransform()
-        initial_guess.set_translation(centroid)
-        # Start with bottle lying on its side (rotated 90 deg about X)
-        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
+        # # Initial guess: center of segmented points, with some reasonable orientation
+        # # The bottle is lying on its side in the bin
+        # centroid = np.mean(segmented_xyz, axis=1)
+        # initial_guess = RigidTransform()
+        # initial_guess.set_translation(centroid)
+        # # Start with bottle lying on its side (rotated 90 deg about X)
+        # initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
         
-        print(f"  Initial guess centroid: {centroid}")
+        # print(f"  Initial guess centroid: {centroid}")
         
         # Run ICP
         try:
-            X_WM_estimated, correspondences = IterativeClosestPoint(
-                p_Om=model_pcl,
-                p_Ws=segmented_xyz,
-                X_Ohat=initial_guess,
-                meshcat=meshcat,
-                meshcat_scene_path="icp_iterations",
-                max_iterations=100,
-            )
+            # X_WM_estimated, correspondences = IterativeClosestPoint(
+            #     p_Om=model_pcl,
+            #     p_Ws=segmented_xyz,
+            #     X_Ohat=initial_guess,
+            #     meshcat=meshcat,
+            #     meshcat_scene_path="icp_iterations",
+            #     max_iterations=100,
+            # )
             
-            print(f"  ✓ ICP converged!")
-            print(f"    Estimated position: {X_WM_estimated.translation()}")
-            rpy = RollPitchYaw(X_WM_estimated.rotation())
-            print(f"    Estimated RPY: [{rpy.roll_angle():.3f}, {rpy.pitch_angle():.3f}, {rpy.yaw_angle():.3f}]")
+            # print(f"  ✓ ICP converged!")
+            # print(f"    Estimated position: {X_WM_estimated.translation()}")
+            # rpy = RollPitchYaw(X_WM_estimated.rotation())
+            # print(f"    Estimated RPY: [{rpy.roll_angle():.3f}, {rpy.pitch_angle():.3f}, {rpy.yaw_angle():.3f}]")
             
-            # Visualize the estimated model pose (magenta)
-            meshcat.SetObject(
-                "pcl_estimated",
-                ToPointCloud(model_pcl),
-                rgba=Rgba(1, 0, 1, 1)  # Magenta
-            )
-            meshcat.SetTransform("pcl_estimated", X_WM_estimated)
+            # # Visualize the estimated model pose (magenta)
+            # meshcat.SetObject(
+            #     "pcl_estimated",
+            #     ToPointCloud(model_pcl),
+            #     rgba=Rgba(1, 0, 1, 1)  # Magenta
+            # )
+            # meshcat.SetTransform("pcl_estimated", X_WM_estimated)
             
-            # Get ground truth pose from simulation
-            plant_context = plant.GetMyContextFromRoot(context)
-            mustard_body = plant.GetBodyByName("base_link_mustard")
-            X_WM_true = plant.EvalBodyPoseInWorld(plant_context, mustard_body)
+            # # Get ground truth pose from simulation
+            # plant_context = plant.GetMyContextFromRoot(context)
+            # mustard_body = plant.GetBodyByName("base_link_mustard")
+            # X_WM_true = plant.EvalBodyPoseInWorld(plant_context, mustard_body)
             
-            print(f"\n  Ground truth position: {X_WM_true.translation()}")
-            rpy_true = RollPitchYaw(X_WM_true.rotation())
-            print(f"  Ground truth RPY: [{rpy_true.roll_angle():.3f}, {rpy_true.pitch_angle():.3f}, {rpy_true.yaw_angle():.3f}]")
+            # print(f"\n  Ground truth position: {X_WM_true.translation()}")
+            # rpy_true = RollPitchYaw(X_WM_true.rotation())
+            # print(f"  Ground truth RPY: [{rpy_true.roll_angle():.3f}, {rpy_true.pitch_angle():.3f}, {rpy_true.yaw_angle():.3f}]")
             
-            # Compute error
-            pos_error = np.linalg.norm(X_WM_estimated.translation() - X_WM_true.translation())
-            print(f"\n  Position error: {pos_error*1000:.1f} mm")
+            # # Compute error
+            # pos_error = np.linalg.norm(X_WM_estimated.translation() - X_WM_true.translation())
+            # print(f"\n  Position error: {pos_error*1000:.1f} mm")
             
             # ========== GRASP SELECTION ==========
             print("\n" + "-" * 40)
@@ -946,7 +946,8 @@ def main():
             print("-" * 40)
             
             # Transform model point cloud to estimated world pose
-            model_world_xyz = X_WM_estimated @ model_pcl
+            # model_world_xyz = X_WM_estimated @ model_pcl
+            model_world_xyz = segmented_xyz
             
             # Create a Drake PointCloud with the transformed model
             grasp_cloud = PointCloud(model_world_xyz.shape[1], Fields(BaseField.kXYZs | BaseField.kNormals))
@@ -965,7 +966,7 @@ def main():
             meshcat.SetObject("pcl_grasp_cloud", grasp_cloud, point_size=0.003, rgba=Rgba(0, 1, 1, 1))
             
             # Select best grasp (with debug=True to see rejection reasons)
-            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=10000, debug=True)
+            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=250, num_to_draw=1, debug=True)
             
             if best_X_G is not None:
                 print(f"\n  ✓ Best grasp found!")

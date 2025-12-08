@@ -4,7 +4,7 @@ from manipulation.exercises.trajectories.rrt_planner.rrt_planning import (
 )
 from src.simulation.simulation_tools import IiwaProblem
 import numpy as np
-from src.planning.rrbt_tree import RRBT_Tree
+from src.planning.rrbt_tree import RRBT_BucketBelief_Tree
 
 
 class RRT_tools:
@@ -53,23 +53,14 @@ class RRT_tools:
         path.reverse()
         return path
 
-class RRBT_tools(RRT_tools):
+class RRBT_BucketBelief_tools(RRT_tools):
     def __init__(
         self, 
-        problem, 
-        max_uncertainty: float = 0.01, 
-        initial_uncertainty: float = 1.0,
-        lambda_weight: float = 1.0,
+        problem
     ) -> None:
         self.problem = problem
-        self.MAX_UNCERTAINTY = max_uncertainty
-
-        self.rrbt_tree = RRBT_Tree(
-            problem, 
-            problem.start, 
-            max_uncertainty, 
-            initial_uncertainty,
-            lambda_weight=lambda_weight,
+        self.rrbt_bucket_belief_tree = RRBT_BucketBelief_Tree(
+            problem
         )
 
 
@@ -78,10 +69,10 @@ class RRBT_tools(RRT_tools):
 
     def extend_towards(self, q_rand):
         dists = [
-            self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_tree.nodes
+            self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_bucket_belief_tree.nodes
         ]
         nearest_idx = np.argmin(dists)
-        node_near = self.rrbt_tree.nodes[nearest_idx]
+        node_near = self.rrbt_bucket_belief_tree.nodes[nearest_idx]
 
         qs = self.calc_intermediate_qs_wo_collision(node_near.value, q_rand)
         if not qs:
@@ -89,8 +80,8 @@ class RRBT_tools(RRT_tools):
 
         curr_parent = node_near
         for q_next in qs:
-            neighbors = self.rrbt_tree.get_nearest_neighbors(q_next, k=10)
-            new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
+            neighbors = self.rrbt_bucket_belief_tree.get_nearest_neighbors(q_next, k=10)
+            new_node = self.rrbt_bucket_belief_tree.InsertNode(q_next, neighbors, curr_parent)
             if new_node is None:
                 break
             curr_parent = new_node
@@ -109,17 +100,9 @@ class RRBT_tools(RRT_tools):
         
         misclassification_risk = 1 - max(belief)
         """
-        from src.estimation.bayes_filter import calculate_misclassification_risk
-        
-        # Belief Check: Is the misclassification risk small enough?
-        misclass_risk = calculate_misclassification_risk(node.belief)
-        if misclass_risk > self.MAX_UNCERTAINTY:
-            return False
+        return self.problem.node_reaches_goal(node, tol=None)
 
-        # If we are here, we have gathered enough information.
-        return True
-
-    def sample_final_goal(self, node):
+    def sample_object_position_from_belief(self, node):
         """
         Simulate the 'Commitment' step.
         Now that uncertainty is low, we use the MAP (Maximum A Posteriori)

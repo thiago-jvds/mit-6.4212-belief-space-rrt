@@ -32,7 +32,7 @@ from pydrake.all import (
 )
 import argparse
 from src.perception.light_and_dark import LightDarkRegionSystem
-from src.simulation.simulation_tools import IiwaProblemBelief, IiwaProblem
+from src.simulation.simulation_tools import IiwaProblemBucketBelief, IiwaProblem
 from src.planning.standard_rrt import rrt_planning
 from src.planning.belief_space_rrt import rrbt_planning
 from src.simulation.sim_setup import (
@@ -139,7 +139,7 @@ def main():
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
     print(
-        f"    > Planner: MaxUncert={config.planner.max_uncertainty}, LightBias={config.planner.prob_sample_light}"
+        f"    > Planner: max_bucket_uncertainty={config.planner.max_bucket_uncertainty}, LightBias={config.planner.bias_prob_sample_q_bucket_light}"
     )
     print()
 
@@ -273,27 +273,27 @@ def main():
         print(f"✓ q_light_hint computed: {q_light_hint}")
         
         # Visualize the light region sampling pose in Meshcat
-        if args.visualize == "True":
-            AddMeshcatTriad(meshcat, "light_region_sampling_pose", length=0.15, radius=0.004)
-            meshcat.SetTransform("light_region_sampling_pose", X_WG_light)
-            print(f"  Visualized light region sampling pose in Meshcat")
+        # if args.visualize == "True":
+        #     AddMeshcatTriad(meshcat, "light_region_sampling_pose", length=0.15, radius=0.004)
+        #     meshcat.SetTransform("light_region_sampling_pose", X_WG_light)
+        #     print(f"  Visualized light region sampling pose in Meshcat")
     except RuntimeError as e:
         print(f"⚠ IK failed for light_center, using q_home as fallback: {e}")
         # q_light_hint = np.array(q_home)
         raise RuntimeError("Cannot compute q_light_hint from light_center. Check that the light region is reachable.")
 
-    problem = IiwaProblemBelief(
-        q_start=q_start,
-        q_goal=q_goal,
-        gripper_setpoint=0.1,
-        meshcat=meshcat,
-        light_center=config.simulation.light_center,
-        light_size=config.simulation.light_size,
-        tpr_light=float(config.physics.tpr_light),
-        fpr_light=float(config.physics.fpr_light),
-        n_buckets=int(config.planner.n_buckets),
-        true_bucket=int(config.planner.true_bucket),
-    )
+    # problem = IiwaProblemBucketBelief(
+    #     q_start=q_start,
+    #     q_goal=q_goal,
+    #     gripper_setpoint=0.1,
+    #     meshcat=meshcat,
+    #     light_center=config.simulation.light_center,
+    #     light_size=config.simulation.light_size,
+    #     tpr_light=float(config.physics.tpr_light),
+    #     fpr_light=float(config.physics.fpr_light),
+    #     n_buckets=int(config.planner.n_buckets),
+    #     true_bucket=int(config.planner.true_bucket),
+    # )
 
     final_path = None
     if args.planner == "rrt":
@@ -345,6 +345,21 @@ def main():
     elif args.planner == "rrbt":
         print("Running RRBT...")
 
+        problem = IiwaProblemBucketBelief(
+            q_start=q_start,
+            q_goal=q_goal,
+            gripper_setpoint=0.1,
+            meshcat=meshcat,
+            light_center=config.simulation.light_center,
+            light_size=config.simulation.light_size,
+            tpr_light=float(config.physics.tpr_light),
+            fpr_light=float(config.physics.fpr_light),
+            n_buckets=int(config.planner.n_buckets),
+            true_bucket=int(config.planner.true_bucket),
+            max_bucket_uncertainty=float(config.planner.max_bucket_uncertainty),
+            lambda_weight=float(config.planner.bucket_lambda_weight),
+        )
+            
         # Create visualization callback for debugging the belief tree
         def tree_viz_callback(rrbt_tree, iteration):
             visualize_belief_tree(rrbt_tree, problem, meshcat, iteration)
@@ -352,10 +367,8 @@ def main():
         rrbt_result, k = rrbt_planning(
             problem,
             max_iterations=int(config.planner.max_iterations),
-            prob_sample_q_goal=float(config.planner.prob_sample_goal),
-            prob_sample_q_light=float(config.planner.prob_sample_light),
-            max_uncertainty=float(config.planner.max_uncertainty),
-            lambda_weight=float(config.planner.lambda_weight),
+            bias_prob_sample_q_goal=float(config.planner.bias_prob_sample_q_goal),
+            bias_prob_sample_q_bucket_light=float(config.planner.bias_prob_sample_q_bucket_light),
             q_light_hint=q_light_hint,
             visualize_callback=None, # Set to tree_viz_callback to see tree grow
             visualize_interval=1000,

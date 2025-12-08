@@ -19,7 +19,7 @@ This ensures:
 from collections import deque
 from manipulation.exercises.trajectories.rrt_planner.rrt_planning import TreeNode
 import numpy as np
-from src.simulation.simulation_tools import IiwaProblemBelief
+from src.simulation.simulation_tools import IiwaProblemBucketBelief
 from src.estimation.bayes_filter import (
     calculate_misclassification_risk,
     expected_posterior_all_buckets,
@@ -47,7 +47,7 @@ class BeliefNode(TreeNode):
         self.cost = cost  # Combined: path_length + λ × misclassification_risk
 
 
-class RRBT_Tree:
+class RRBT_BucketBelief_Tree:
     """
     Rapidly-exploring Random Belief Tree with discrete Bayes filter.
     
@@ -65,27 +65,21 @@ class RRBT_Tree:
     
     def __init__(
         self, 
-        problem, 
-        root_value, 
-        max_uncertainty, 
-        initial_uncertainty=1.0,  # Kept for API compatibility
-        lambda_weight=1.0,
+        problem
     ):
-        self.problem: IiwaProblemBelief = problem
+        self.problem = problem
         self.cspace = problem.cspace
-        self.lambda_weight = lambda_weight
 
         # Goal threshold for termination check
-        self.GOAL_THRESHOLD = max_uncertainty
+        self.GOAL_THRESHOLD = problem.max_bucket_uncertainty
 
         # Initialize Root with UNIFORM PRIOR (maximum uncertainty)
         n_buckets = problem.n_buckets
-        init_belief = np.ones(n_buckets) / n_buckets  # [1/3, 1/3, 1/3]
-        init_risk = calculate_misclassification_risk(init_belief)  # 0.667 for 3 buckets
-        init_cost = 0.0 + lambda_weight * init_risk  # path_length=0 at root
+        init_belief = np.ones(n_buckets) / n_buckets  # e.g. [1/2, 1/2]
+        init_cost = self.problem.cost_function(0.0, init_belief)
         
         self.root = BeliefNode(
-            root_value, 
+            value=problem.start, 
             parent=None, 
             belief=init_belief, 
             cost=init_cost,
@@ -148,8 +142,7 @@ class RRBT_Tree:
         path_length_new = parent_node.path_length + dist_increment
         
         # Compute combined cost using misclassification risk
-        misclass_risk = calculate_misclassification_risk(belief_new)
-        cost_new = path_length_new + self.lambda_weight * misclass_risk
+        cost_new = self.problem.cost_function(path_length_new, belief_new)
 
         return {
             "belief": belief_new, 

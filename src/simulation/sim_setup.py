@@ -12,7 +12,7 @@ for proper Bayes filter execution.
 """
 
 import numpy as np
-from src.simulation.simulation_tools import IiwaProblemBelief
+from src.simulation.simulation_tools import IiwaProblemBucketBelief
 from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_buckets
 from typing import List
 from pydrake.all import (

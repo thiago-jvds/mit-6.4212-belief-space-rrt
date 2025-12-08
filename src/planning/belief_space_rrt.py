@@ -14,7 +14,7 @@ The planner uses RRT*-style anytime behavior:
 """
 
 import numpy as np
-from src.planning.rrt_tools import RRBT_tools
+from src.planning.rrt_tools import RRBT_BucketBelief_tools
 from src.estimation.bayes_filter import calculate_misclassification_risk
 import random
 
@@ -24,10 +24,8 @@ from typing import Callable, Optional
 def rrbt_planning(
     problem,
     max_iterations: int = 2000,
-    prob_sample_q_goal: float = 0.05,  # Reduced bias since we don't know goal location
-    prob_sample_q_light: float = 0.4,  # Increased bias to force info gathering
-    max_uncertainty: float = 0.01,
-    lambda_weight: float = 1.0,
+    bias_prob_sample_q_goal: float = 0.05,  # Reduced bias since we don't know goal location
+    bias_prob_sample_q_bucket_light: float = 0.4,  # Increased bias to force info gathering
     q_light_hint: np.ndarray = np.array(
         [0.663, 0.746, 0.514, -1.406, 0.996, -1.306, -1.028]
     ),
@@ -60,11 +58,8 @@ def rrbt_planning(
         ((path_to_info, predicted_goal_config), iterations) or (None, iterations)
     """
     # 1. Initialize Tools with lambda_weight
-    tools = RRBT_tools(
-        problem, 
-        max_uncertainty=max_uncertainty, 
-        initial_uncertainty=1.0,  # Not used for discrete Bayes filter
-        lambda_weight=lambda_weight,
+    tools = RRBT_BucketBelief_tools(
+        problem,
     )
 
     # Track the best valid solution found
@@ -77,10 +72,10 @@ def rrbt_planning(
         # 2. Sample
         eps = random.random()
 
-        if eps < prob_sample_q_goal:
+        if eps < bias_prob_sample_q_goal:
             # Sample the Prior Mean (Best guess of goal)
             q_rand = problem.goal
-        elif eps < (prob_sample_q_goal + prob_sample_q_light):
+        elif eps < (bias_prob_sample_q_goal + bias_prob_sample_q_bucket_light):
             # Sample the Light Region (To gain info)
             q_rand = tuple(q_light_hint + np.random.uniform(-0.1, 0.1, size=7))
         else:
@@ -90,7 +85,7 @@ def rrbt_planning(
         last_node = tools.extend_towards(q_rand)
 
         # 4. Check if this node is a valid solution AND better than current best
-        if tools.node_reaches_goal(last_node, tol=None):
+        if problem.node_reaches_goal(last_node, tol=None):
             if last_node.cost < best_cost:
                 # Found a better solution!
                 best_node = last_node
@@ -124,7 +119,7 @@ def rrbt_planning(
 
         # Visualize progress
         if visualize_callback and (k + 1) % visualize_interval == 0:
-            visualize_callback(tools.rrbt_tree, k + 1)
+            visualize_callback(tools.rrbt_bucket_belief_tree, k + 1)
 
         # Progress report
         if k % 100 == 0:
@@ -138,17 +133,17 @@ def rrbt_planning(
 
     # 5. Final pass: Scan ALL nodes to find the best valid solution
     # This catches any improvements from rewiring that we might have missed
-    print(f"\n   Scanning {len(tools.rrbt_tree.nodes)} nodes for best solution...")
-    for node in tools.rrbt_tree.nodes:
+    print(f"\n   Scanning {len(tools.rrbt_bucket_belief_tree.nodes)} nodes for best solution...")
+    for node in tools.rrbt_bucket_belief_tree.nodes:
         misclass_risk = calculate_misclassification_risk(node.belief)
-        if misclass_risk <= max_uncertainty and node.cost < best_cost:
+        if misclass_risk <= problem.max_bucket_uncertainty and node.cost < best_cost:
             best_node = node
             best_cost = node.cost
 
     # 6. Return the best solution found
     if best_node is not None:
         path_to_info = tools.backup_path_from_node(best_node)
-        pred_q_goal = tools.sample_final_goal(best_node)
+        pred_q_goal = tools.sample_object_position_from_belief(best_node)
         
         misclass_risk = calculate_misclassification_risk(best_node.belief)
         print(
@@ -166,7 +161,7 @@ def rrbt_planning(
             )
 
         if visualize_callback:
-            visualize_callback(tools.rrbt_tree, max_iterations)
+            visualize_callback(tools.rrbt_bucket_belief_tree, max_iterations)
 
         return (path_to_info, pred_q_goal), max_iterations
     

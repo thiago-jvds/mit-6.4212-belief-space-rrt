@@ -26,22 +26,23 @@ planner:
   max_iterations: 1000
 
   # Bucket configuration for discrete Bayes filter
-  n_buckets: 3       # Number of discrete hypotheses
+  n_buckets: 2       # Number of discrete hypotheses
   true_bucket: 0     # Ground truth bucket index for simulation (bucket A)
 
   # GOAL CONDITION: We cannot finish unless we are confident.
   # Threshold for misclassification_risk = 1 - max(belief)
-  max_uncertainty: 0.01
+  max_bucket_uncertainty: 0.01
 
   # COST FUNCTION: cost = path_length + lambda_weight × misclassification_risk
   # - Small lambda (0.1-1): Prioritize shorter paths
   # - Medium lambda (1-10): Balanced
   # - Large lambda (100+): Prioritize uncertainty reduction
-  lambda_weight: 0.1
+  bucket_lambda_weight: 0.1
 
   # Biases
-  prob_sample_goal: 0.5
-  prob_sample_light: 0.5
+  bias_prob_sample_q_bucket_light: 0.5
+  bias_prob_sample_q_goal: 0.5
+
 
 # Visualization settings
 visualization:

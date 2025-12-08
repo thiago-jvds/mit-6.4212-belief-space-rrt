@@ -1,0 +1,113 @@
+directives:
+# 1. Add the Kuka iiwa robot
+- add_model:
+    name: iiwa
+    file: package://drake_models/iiwa_description/urdf/iiwa14_primitive_collision.urdf
+    default_joint_positions:
+      iiwa_joint_1: [ 0 ]
+      iiwa_joint_2: [ 0.1 ]
+      iiwa_joint_3: [ 0 ]
+      iiwa_joint_4: [ -1.2 ]
+      iiwa_joint_5: [ 0 ]
+      iiwa_joint_6: [ 1.6 ]
+      iiwa_joint_7: [ 0 ]
+
+# 2. Weld the robot to the world
+- add_weld:
+    parent: world
+    child: iiwa::iiwa_link_0
+    X_PC:
+      translation: [ 0.0, 0.0, 0.0 ]
+
+# 3. Add the WSG Gripper
+- add_model:
+    name: wsg
+    file: package://manipulation/hydro/schunk_wsg_50_with_tip.sdf
+
+# 4. Mount Gripper to Robot (Weld wsg to iiwa flange)
+- add_weld:
+    parent: iiwa::iiwa_link_7
+    child: wsg::body
+    X_PC:
+      translation: [ 0, 0, 0.09 ]
+      rotation: !Rpy { deg: [ 90, 0, 90 ] }
+
+# 4b. Add the Camera (Physical Body)
+# We weld a camera box to the top of last link 
+# so it moves with the hand
+- add_model:
+    name: left_wrist_camera
+    file: package://manipulation/camera_box.sdf
+
+- add_weld:
+    parent: iiwa::iiwa_link_7
+    child: left_wrist_camera::base
+    X_PC:
+      translation: [ -0.095, 0.2, 0.1 ] # Mounted slightly "above" the gripper (in gripper frame)
+      rotation: !Rpy { deg: [ -180, 170, 90 ] } # Looking forward
+
+- add_model:
+    name: right_wrist_camera
+    file: package://manipulation/camera_box.sdf
+
+- add_weld:
+    parent: iiwa::iiwa_link_7
+    child: right_wrist_camera::base
+    X_PC:
+      translation: [ -0.095, -0.2, 0.1 ] # Mounted slightly "above" the gripper (in gripper frame)
+      rotation: !Rpy { deg: [ -180, 190, 90 ] } # Looking forward
+
+# 5. Add the Floor
+- add_model:
+    name: floor
+    file: package://manipulation/floor.sdf
+
+- add_weld:
+    parent: world
+    child: floor::box
+    X_PC:
+      translation: [ 0, 0, -0.1 ]
+
+# 6. Add the Manipulation Bin (bin2 from original scenario)
+- add_model:
+    name: bin
+    file: package://drake_models/manipulation_station/bin.sdf
+
+- add_weld:
+    parent: world
+    child: bin::bin_base
+    X_PC:
+      translation: [ 0.7, 0.0, 0.0 ]
+      rotation: !Rpy { deg: [ 0, 0, -180 ] }
+
+# 7. Add the Mustard Bottle as a FREE BODY (not welded)
+# It will fall into the bin when simulation runs
+# Position: hovering above the center of the bin
+# Orientation: on its side (rotated 90 deg about Y axis)
+- add_model:
+    name: mustard
+    file: package://drake_models/ycb/006_mustard_bottle.sdf
+    default_free_body_pose:
+      base_link_mustard:
+        translation: [ 0.7, 0.0, 0.35 ]
+        rotation: !Rpy { deg: [ 0, 0, 90 ] }
+
+# 8. Define the Sensors
+# This tells Drake to render images from the camera body we just added
+cameras:
+  left_wrist_camera_sensor:
+    name: left_wrist_camera_sensor
+    depth: true
+    X_PB:
+      base_frame: left_wrist_camera::base
+  right_wrist_camera_sensor:
+    name: right_wrist_camera_sensor
+    depth: true
+    X_PB:
+      base_frame: right_wrist_camera::base
+
+model_drivers:
+  iiwa: !IiwaDriver
+    control_mode: position_only
+    hand_model_name: wsg
+  wsg: !SchunkWsgDriver {}

@@ -1328,7 +1328,7 @@ def main():
             meshcat.SetObject("pcl_grasp_cloud", grasp_cloud, point_size=0.003, rgba=Rgba(0, 1, 1, 1))
             
             # Select best grasp (with debug=True to see rejection reasons)
-            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=100000, num_to_draw=1, debug=True)
+            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=100000, num_to_draw=0, debug=True)
             
             if best_X_G is not None:
                 print(f"\n  ✓ Best grasp found!")
@@ -1370,13 +1370,13 @@ def main():
                 rpy_pregrasp = RollPitchYaw(R_pregrasp)
                 print(f"  Pre-grasp RPY:      [{rpy_pregrasp.roll_angle():.3f}, {rpy_pregrasp.pitch_angle():.3f}, {rpy_pregrasp.yaw_angle():.3f}]")
                 
-                # Visualize as a triad (coordinate frame) in Meshcat
-                # Red = X (finger close direction), Green = Y (approach, pointing down), Blue = Z
-                AddMeshcatTriad(meshcat, "pre_grasp_pose", length=0.2, radius=0.005)
-                meshcat.SetTransform("pre_grasp_pose", X_pregrasp)
+                # # Visualize as a triad (coordinate frame) in Meshcat
+                # # Red = X (finger close direction), Green = Y (approach, pointing down), Blue = Z
+                # AddMeshcatTriad(meshcat, "pre_grasp_pose", length=0.2, radius=0.005)
+                # meshcat.SetTransform("pre_grasp_pose", X_pregrasp)
                 
-                # Also draw a gripper at the pre-grasp pose for visualization
-                draw_grasp_candidate(meshcat, X_pregrasp, prefix="pre_grasp_gripper")
+                # # Also draw a gripper at the pre-grasp pose for visualization
+                # draw_grasp_candidate(meshcat, X_pregrasp, prefix="pre_grasp_gripper")
                 
                 print(f"\n  ✓ Pre-grasp pose visualized in Meshcat")
                 print(f"    - 'pre_grasp_pose': Coordinate frame triad")

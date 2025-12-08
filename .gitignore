@@ -1,3 +1,5 @@
+dev_notes/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -138,6 +140,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.rm-fp-venv
 env/
 venv/
 ENV/
@@ -224,3 +227,6 @@ results/
 *.log
 *.csv
 *.bag
+
+# Vscode
+.vscode/

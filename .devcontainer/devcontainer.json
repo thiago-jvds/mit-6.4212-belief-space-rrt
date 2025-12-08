@@ -1,0 +1,38 @@
+{
+  "name": "Drake DevContainer",
+  "image": "russtedrake/manipulation:90658e5",
+  "forwardPorts": [7000, 7001, 7002, 8000, 8888],
+  "portsAttributes": {
+    "7000": { "label": "MeshCat", "onAutoForward": "notify" },
+    "7001": { "label": "MeshCat", "onAutoForward": "notify" },
+    "7002": { "label": "MeshCat", "onAutoForward": "notify" },
+    "8000": { "label": "MeshCat", "onAutoForward": "notify" },
+    "8888": { "label": "MeshCat", "onAutoForward": "notify" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "runArgs": [
+    "-e", "DISPLAY=host.docker.internal:0"
+  ],
+  "remoteEnv": {
+    "DISPLAY": "host.docker.internal:0"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "remote.localPortHost": "localhost",
+        "python.defaultInterpreterPath": "${workspaceFolder}/.rm-fp-venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      }
+    }
+  },
+  "postCreateCommand": [
+    "bash",
+    "-c",
+    "chmod +x .devcontainer/postCreate.sh && .devcontainer/postCreate.sh"
+  ]
+}

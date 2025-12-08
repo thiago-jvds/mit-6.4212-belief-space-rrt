@@ -1,0 +1,53 @@
+simulation:
+  light_center: [ 0.0, 1.0, 0.5 ]
+  light_size: [ 0.25, 0.25, 0.25 ]
+  q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
+  # Goal specified as end-effector pose in world frame
+  # Much easier to reason about than 7D joint configuration
+  tf_goal:
+    translation: [ 0.75, 0.0, 0.4 ]   # [x, y, z] position in meters
+    rpy: [ 0.0, 3.14159, -1.5708 ]   # [roll, pitch, yaw] Euler angles in radians (X-Y-Z)
+
+physics:
+  # Process Noise is ZERO. 
+  # The target does not move/drift. The robot moves perfectly.
+  process_noise_scale: 0.0
+
+  # TPR/FPR Sensor Model (replaces Gaussian noise variance)
+  # Light region: Informative binary sensor
+  tpr_light: 0.80   # True Positive Rate: P(detected | object present)
+  fpr_light: 0.15   # False Positive Rate: P(detected | object absent)
+  # Dark region: Uninformative sensor (TPR=FPR=0.5, hardcoded)
+
+  # Keep buffer to avoid hitting the bottle while exploring
+  safety_buffer_radius: 0.08
+
+planner:
+  max_iterations: 1000
+
+  # Bucket configuration for discrete Bayes filter
+  n_buckets: 3       # Number of discrete hypotheses
+  true_bucket: 0     # Ground truth bucket index for simulation (bucket A)
+
+  # GOAL CONDITION: We cannot finish unless we are confident.
+  # Threshold for misclassification_risk = 1 - max(belief)
+  max_uncertainty: 0.01
+
+  # COST FUNCTION: cost = path_length + lambda_weight × misclassification_risk
+  # - Small lambda (0.1-1): Prioritize shorter paths
+  # - Medium lambda (1-10): Balanced
+  # - Large lambda (100+): Prioritize uncertainty reduction
+  lambda_weight: 0.1
+
+  # Biases
+  prob_sample_goal: 0.5
+  prob_sample_light: 0.5
+
+# Visualization settings
+visualization:
+  # Camera pose for Meshcat viewport
+  camera_position: [ -0.66052837, -0.68944092, 1.09457347 ]
+  camera_target: [ 0.3, 0.3, 0.0 ]
+  
+  # Belief bar chart position in world frame
+  chart_position: [ -0.3, 0.5, 0.8 ]

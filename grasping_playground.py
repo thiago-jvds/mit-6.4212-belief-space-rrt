@@ -383,7 +383,7 @@ class MustardIterativeClosestPoint(LeafSystem):
         initial_guess = RigidTransform()
         initial_guess.set_translation(centroid)
         # Start with bottle lying on its side (common pose in bin)
-        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(np.pi/2, np.pi/2, 0)))
+        initial_guess.set_rotation(RotationMatrix(RollPitchYaw(0, 0, 0)))
         
         X_WOhat, chat = IterativeClosestPoint(
             self.mustard.xyzs(),
@@ -406,30 +406,15 @@ def make_internal_model():
     """
     Create an internal model for grasp planning/collision checking.
     
-    NOTE: This model intentionally only includes a free-floating gripper and floor,
-    NOT the bins. This is because when grasping objects inside bins, the gripper
-    needs to reach inside the bin, and having bin collision geometry would cause
-    all grasp candidates to be rejected due to gripper-bin collisions.
-    
-    The collision checking against the point cloud (the object) is done separately.
+    This is the model in the robot's "head" - contains gripper, cameras, bins.
+    Used to check collisions between the gripper and the environment.
+    (Based on grasp_selection_example.py)
     """
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
     parser = Parser(plant)
     ConfigureParser(parser)
-    
-    # Only load the gripper (as a free body) and floor - NO bins
-    # This allows grasp planning to work inside bins without collision issues
-    parser.AddModelsFromUrl("package://manipulation/schunk_wsg_50_welded_fingers.sdf")
-    parser.AddModelsFromUrl("package://manipulation/floor.sdf")
-    
-    # Weld the floor to world
-    plant.WeldFrames(
-        plant.world_frame(), 
-        plant.GetFrameByName("box"),
-        RigidTransform([0, 0, -0.5])  # Floor at z=-0.5
-    )
-    
+    parser.AddModelsFromUrl("package://manipulation/clutter_planning.dmd.yaml")
     plant.Finalize()
     return builder.Build()
 
@@ -745,6 +730,8 @@ def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, de
         # Progress update every 20 candidates
         if (i + 1) % 20 == 0:
             print(f"    Processed {i+1}/{num_candidates}, found {len(costs)} valid grasps")
+        if len(costs) > 250:
+            break
     
     # Print rejection summary
     print(f"\n  Rejection summary:")
@@ -874,13 +861,13 @@ def main():
     # random_rotation = UniformlyRandomRotationMatrix(generator)
     
     # generate random value from 0 to 2pi for the rotation around the z
-    random_rotation = RollPitchYaw(0, 0, np.random.uniform(0, 2*np.pi)).ToRotationMatrix()
+    random_rotation = RollPitchYaw(-np.pi/2, 0, np.random.uniform(0, 2*np.pi)).ToRotationMatrix()
     
     # Random XY position within bin bounds, Z height above bin
     x_offset = -0.01
     x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
     y_range = (-0.15, 0.15)  # min, max for y offset from bin center
-    random_z = 0.25  # Height above bin
+    random_z = 0.2  # Height above bin
     
     random_x = rng.uniform(x_range[0], x_range[1])
     random_y = rng.uniform(y_range[0], y_range[1])
@@ -1119,7 +1106,7 @@ def main():
             meshcat.SetObject("pcl_grasp_cloud", grasp_cloud, point_size=0.003, rgba=Rgba(0, 1, 1, 1))
             
             # Select best grasp (with debug=True to see rejection reasons)
-            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=1000, num_to_draw=1, debug=True)
+            best_X_G, best_cost = select_best_grasp(meshcat, grasp_cloud, rng, num_candidates=100000, num_to_draw=1, debug=True)
             
             if best_X_G is not None:
                 print(f"\n  ✓ Best grasp found!")

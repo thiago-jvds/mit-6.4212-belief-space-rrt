@@ -44,6 +44,18 @@ directives:
         translation: [ 10.0, 10.0, 10.0 ]
         rotation: !Rpy { deg: [ 0, 0, 0 ] }
 
+# 5. Add square bin (0.49m x 0.49m) centered between the two rectangular bins
+- add_model:
+    name: square_bin
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/square_bin.sdf
+
+- add_weld:
+    parent: world
+    child: square_bin::bin_base
+    X_PC:
+      translation: [ 0.5, -0.5, -0.015 ]
+      rotation: !Rpy { deg: [ 0, 0, 0 ] }
+
 # Define RGBD sensors for all 6 cameras from two_bins_w_cameras.dmd.yaml
 # Cameras 0-2 are around bin0, cameras 3-5 are around bin1
 cameras:

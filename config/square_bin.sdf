@@ -1,0 +1,138 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="square_bin_model">
+    <!--
+    Square Bin - Based on drake manipulation_station bin.sdf
+    
+    Axes:
+      +X - Pointing towards front
+      +Y - Pointing to left side
+      +Z - Up
+    Origin:
+      (0, 0, 0) at the center bottom of the bin
+    
+    Dimensions:
+      Interior: 0.49m x 0.49m (using short side of original rectangular bin)
+      Wall thickness: 0.05m
+      Wall height: 0.21m
+      Bottom thickness: 0.015m
+    -->
+    <link name="bin_base">
+      <inertial>
+        <mass>15.0</mass>
+        <inertia>
+          <ixx>0.5</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.5</iyy>
+          <iyz>0</iyz>
+          <izz>0.8</izz>
+        </inertia>
+      </inertial>
+      <!-- Front wall -->
+      <visual name="front_visual">
+        <pose>0.22 0 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.49 0.21</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="front">
+        <pose>0.22 0 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.49 0.21</size>
+          </box>
+        </geometry>
+      </collision>
+      <!-- Back wall -->
+      <visual name="back_visual">
+        <pose>-0.22 0 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.49 0.21</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="back">
+        <pose>-0.22 0 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.49 0.21</size>
+          </box>
+        </geometry>
+      </collision>
+      <!-- Left wall -->
+      <visual name="left_visual">
+        <pose>0 0.22 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.05 0.21</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="left">
+        <pose>0 0.22 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.05 0.21</size>
+          </box>
+        </geometry>
+      </collision>
+      <!-- Right wall -->
+      <visual name="right_visual">
+        <pose>0 -0.22 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.05 0.21</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="right">
+        <pose>0 -0.22 0.105 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.05 0.21</size>
+          </box>
+        </geometry>
+      </collision>
+      <!-- Bottom -->
+      <visual name="bottom_visual">
+        <pose>0.0 0.0 0.0075 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.49 0.015</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="bottom">
+        <pose>0.0 0.0 0.0075 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.49 0.49 0.015</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+    <!-- Frame for the top center of the bin -->
+    <frame name="bin_top_center">
+      <pose relative_to="bin_base">0 0 0.21 0 0 0</pose>
+    </frame>
+  </model>
+</sdf>

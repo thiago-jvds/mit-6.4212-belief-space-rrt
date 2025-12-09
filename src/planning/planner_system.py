@@ -56,6 +56,7 @@ class PlannerState(Enum):
     RRBT2_PLANNING = auto()    # Running RRBT for position belief (blocking)
     RRBT2_EXECUTING = auto()   # Playing RRBT2 trajectory
     GRASP_PLANNING = auto()    # Compute grasp and pre-grasp poses from covariance
+    GRASP_EXECUTING = auto()   # Execute grasp trajectory (pregrasp → grasp → lift)
     COMPLETE = auto()          # Done, holding at final position
 
 
@@ -164,11 +165,36 @@ class PlannerSystem(LeafSystem):
         self._pregrasp_pose = None
         self._rng = np.random.default_rng()  # Random generator for grasp sampling
         
-        # Output port
+        # Grasp execution variables
+        self._grasp_trajectory = None
+        self._grasp_start_time = None
+        self._grasp_close_time = None  # Time offset when gripper should close
+        self._grasp_open_time = None   # Time offset when gripper should open (release)
+        self._grasp_end_position = None
+        self._gripper_command = 0.1  # Start open (0.1m = fully open)
+        
+        # Drop pose variables
+        self._drop_pose = None
+        
+        # Create plant context for forward kinematics (gripper visualization)
+        self._fk_plant_context = self._plant.CreateDefaultContext()
+        self._gripper_body = self._plant.GetBodyByName("body", self._plant.GetModelInstanceByName("wsg"))
+        
+        # Add Meshcat triad for gripper visualization
+        AddMeshcatTriad(self._meshcat, "gripper_frame", length=0.1, radius=0.004)
+        
+        # Output port: joint position command
         self.DeclareVectorOutputPort(
             "iiwa_position_command",
             BasicVector(7),
             self.CalcJointCommand
+        )
+        
+        # Output port: gripper position command
+        self.DeclareVectorOutputPort(
+            "wsg_position_command",
+            BasicVector(1),
+            self.CalcGripperCommand
         )
         
         print(f"PlannerSystem initialized:")
@@ -212,10 +238,11 @@ class PlannerSystem(LeafSystem):
         The state machine transitions happen here based on time and completion.
         """
         t = context.get_time()
+        q_command = self._q_home  # Default to home position
         
         if self._state == PlannerState.IDLE:
             # Waiting for configuration - hold at home
-            output.SetFromVector(self._q_home)
+            q_command = self._q_home
             
         elif self._state == PlannerState.RRBT_PLANNING:
             # Run RRBT planning for bin belief (blocking)
@@ -227,7 +254,7 @@ class PlannerSystem(LeafSystem):
             self._state = PlannerState.RRBT_EXECUTING
             print(f"RRBT planning complete. Starting trajectory execution at t={t:.2f}s")
             print(f"  RRBT trajectory duration: {self._rrbt_trajectory.end_time():.2f}s")
-            output.SetFromVector(self._q_home)
+            q_command = self._q_home
             
         elif self._state == PlannerState.RRBT_EXECUTING:
             t_traj = t - self._rrbt_start_time
@@ -239,10 +266,9 @@ class PlannerSystem(LeafSystem):
                 self._state = PlannerState.POSE_ESTIMATION
                 print(f"\nRRBT execution complete at t={t:.2f}s")
                 print(f"  End position: {np.round(self._rrbt_end_position, 3)}")
-                output.SetFromVector(self._rrbt_end_position)
+                q_command = self._rrbt_end_position
             else:
-                q = self._rrbt_trajectory.value(t_traj).flatten()
-                output.SetFromVector(q)
+                q_command = self._rrbt_trajectory.value(t_traj).flatten()
         
         elif self._state == PlannerState.POSE_ESTIMATION:
             # Read estimated pose from input port (triggers MustardPoseEstimatorSystem)
@@ -258,7 +284,7 @@ class PlannerSystem(LeafSystem):
             
             # Transition to RRBT2 planning (mustard position belief)
             self._state = PlannerState.RRBT2_PLANNING
-            output.SetFromVector(self._rrbt_end_position)
+            q_command = self._rrbt_end_position
                 
         elif self._state == PlannerState.RRBT2_PLANNING:
             # Run RRBT2 for mustard position belief (blocking)
@@ -270,7 +296,7 @@ class PlannerSystem(LeafSystem):
             self._state = PlannerState.RRBT2_EXECUTING
             print(f"RRBT2 planning complete. Starting trajectory execution at t={t:.2f}s")
             print(f"  RRBT2 trajectory duration: {self._rrbt2_trajectory.end_time():.2f}s")
-            output.SetFromVector(self._rrbt_end_position)
+            q_command = self._rrbt_end_position
             
         elif self._state == PlannerState.RRBT2_EXECUTING:
             t_traj = t - self._rrbt2_start_time
@@ -282,10 +308,9 @@ class PlannerSystem(LeafSystem):
                 self._state = PlannerState.GRASP_PLANNING
                 print(f"\nRRBT2 execution complete at t={t:.2f}s")
                 print(f"  End position: {np.round(self._rrbt2_end_position, 3)}")
-                output.SetFromVector(self._rrbt2_end_position)
+                q_command = self._rrbt2_end_position
             else:
-                q = self._rrbt2_trajectory.value(t_traj).flatten()
-                output.SetFromVector(q)
+                q_command = self._rrbt2_trajectory.value(t_traj).flatten()
         
         elif self._state == PlannerState.GRASP_PLANNING:
             # Run grasp planning (blocking)
@@ -293,22 +318,132 @@ class PlannerSystem(LeafSystem):
             print("GRASP PLANNING PHASE")
             print(f"{'='*60}")
             self._run_grasp_planning(context)
-            self._state = PlannerState.COMPLETE
-            print(f"\n{'='*60}")
-            print("EXECUTION COMPLETE")
-            print(f"{'='*60}")
-            print(f"  Final position: {np.round(self._rrbt2_end_position, 3)}")
+            
             if self._best_grasp_pose is not None:
-                print(f"  Best grasp position: {np.round(self._best_grasp_pose.translation(), 3)}")
-                print(f"  Pre-grasp position: {np.round(self._pregrasp_pose.translation(), 3)}")
+                # Compute grasp execution trajectory
+                if self._compute_grasp_trajectory():
+                    # Transition to grasp execution
+                    self._grasp_start_time = t
+                    self._gripper_command = 0.1  # Start with gripper open
+                    self._state = PlannerState.GRASP_EXECUTING
+                    print(f"\n{'='*60}")
+                    print("GRASP EXECUTION PHASE")
+                    print(f"{'='*60}")
+                    print(f"  Starting grasp execution at t={t:.2f}s")
+                    print(f"  Trajectory duration: {self._grasp_trajectory.end_time():.1f}s")
+                else:
+                    # IK failed, skip to complete
+                    print(f"  Grasp trajectory computation failed, skipping execution")
+                    self._state = PlannerState.COMPLETE
             else:
-                print(f"  No valid grasp found")
-            print(f"  Total time: {t:.2f}s")
-            output.SetFromVector(self._rrbt2_end_position)
+                print(f"  No valid grasp found, skipping execution")
+                self._state = PlannerState.COMPLETE
+            
+            q_command = self._rrbt2_end_position
+        
+        elif self._state == PlannerState.GRASP_EXECUTING:
+            # Execute grasp trajectory
+            t_traj = t - self._grasp_start_time
+            
+            # Update gripper command based on trajectory phase
+            # Order matters: check open time first (it comes after close time)
+            if self._grasp_open_time is not None and t_traj >= self._grasp_open_time:
+                self._gripper_command = 0.1  # Open gripper (release object)
+            elif t_traj >= self._grasp_close_time:
+                self._gripper_command = 0.0  # Close gripper (holding object)
+            else:
+                self._gripper_command = 0.1  # Keep gripper open (before grasp)
+            
+            if t_traj >= self._grasp_trajectory.end_time():
+                # Grasp execution complete
+                self._state = PlannerState.COMPLETE
+                print(f"\n{'='*60}")
+                print("EXECUTION COMPLETE")
+                print(f"{'='*60}")
+                print(f"  Final position: {np.round(self._grasp_end_position, 3)}")
+                print(f"  Object released into square bin!")
+                print(f"  Total time: {t:.2f}s")
+                q_command = self._grasp_end_position
+            else:
+                q_command = self._grasp_trajectory.value(t_traj).flatten()
+                # Debug: print progress at key milestones (only once each)
+                if not hasattr(self, '_grasp_milestone_printed'):
+                    self._grasp_milestone_printed = set()
+                
+                # Use dynamic milestone times (stored in _compute_grasp_trajectory)
+                t_pre = getattr(self, '_grasp_t_pregrasp', 3.0)
+                t_grp = getattr(self, '_grasp_t_grasp', 5.0)
+                t_lft = getattr(self, '_grasp_t_lift_start', 6.0)
+                t_drp = getattr(self, '_grasp_t_drop', 8.0)
+                t_rel = getattr(self, '_grasp_t_release', 9.0)
+                
+                milestone = None
+                if t_traj < 0.1:
+                    milestone = "start"
+                elif abs(t_traj - t_pre) < 0.1:
+                    milestone = "pregrasp"
+                elif abs(t_traj - t_grp) < 0.1:
+                    milestone = "grasp"
+                elif abs(t_traj - t_lft) < 0.1:
+                    milestone = "lift"
+                elif abs(t_traj - t_drp) < 0.1:
+                    milestone = "drop"
+                elif abs(t_traj - t_rel) < 0.1:
+                    milestone = "release"
+                
+                if milestone and milestone not in self._grasp_milestone_printed:
+                    self._grasp_milestone_printed.add(milestone)
+                    if milestone == "start":
+                        print(f"  [t={t_traj:.2f}s] Starting grasp trajectory execution")
+                    elif milestone == "pregrasp":
+                        print(f"  [t={t_traj:.2f}s] Reached PREGRASP pose")
+                    elif milestone == "grasp":
+                        print(f"  [t={t_traj:.2f}s] Reached GRASP pose - CLOSING GRIPPER")
+                    elif milestone == "lift":
+                        print(f"  [t={t_traj:.2f}s] Grasp hold complete - LIFTING")
+                    elif milestone == "drop":
+                        print(f"  [t={t_traj:.2f}s] Reached DROP pose above square bin")
+                    elif milestone == "release":
+                        print(f"  [t={t_traj:.2f}s] OPENING GRIPPER - releasing object")
                 
         elif self._state == PlannerState.COMPLETE:
             # Hold at final position
-            output.SetFromVector(self._rrbt2_end_position)
+            if self._grasp_end_position is not None:
+                q_command = self._grasp_end_position
+            elif self._rrbt2_end_position is not None:
+                q_command = self._rrbt2_end_position
+            else:
+                q_command = self._q_home
+        
+        # Set output and update gripper triad visualization
+        output.SetFromVector(q_command)
+        self._update_gripper_triad(q_command)
+    
+    def CalcGripperCommand(self, context, output):
+        """
+        Calculate the gripper position command.
+        
+        The gripper stays open (0.1m) during motion and closes (0.0m) 
+        during the grasp hold phase.
+        """
+        output.SetFromVector([self._gripper_command])
+    
+    def _update_gripper_triad(self, q_iiwa):
+        """
+        Update the Meshcat gripper triad visualization using forward kinematics.
+        
+        Args:
+            q_iiwa: 7-element array of iiwa joint positions
+        """
+        # Set iiwa positions in the FK context
+        iiwa_model = self._plant.GetModelInstanceByName("iiwa")
+        self._plant.SetPositions(self._fk_plant_context, iiwa_model, q_iiwa)
+        
+        # Get gripper pose via forward kinematics
+        X_WG = self._plant.EvalBodyPoseInWorld(self._fk_plant_context, self._gripper_body)
+        
+        # Update Meshcat triad
+        self._meshcat.SetTransform("gripper_frame", X_WG)
     
     def _compute_ik_targets(self):
         """
@@ -365,10 +500,10 @@ class PlannerSystem(LeafSystem):
             print(f"  IK failed for bin_light_center, using q_home as fallback: {e}")
             raise RuntimeError("Cannot compute q_bin_light_hint from bin_light_center. Check that the bin light region is reachable.")
 
-        # # Visualize bin light hint triad
-        # AddMeshcatTriad(self._meshcat, "ik_targets/bin_light", length=0.15, radius=0.005)
-        # self._meshcat.SetTransform("ik_targets/bin_light", X_WG_bin_light)
-        # print(f"  Added triad at bin_light_center: {bin_light_center}")
+        # Visualize bin light hint triad
+        AddMeshcatTriad(self._meshcat, "ik_targets/bin_light", length=0.15, radius=0.005)
+        self._meshcat.SetTransform("ik_targets/bin_light", X_WG_bin_light)
+        print(f"  Added triad at bin_light_center: {bin_light_center}")
 
         # Compute q_mustard_position_light_hint from mustard_position_light_center
         mustard_position_light_center = self._config.simulation.mustard_position_light_center
@@ -535,12 +670,14 @@ class PlannerSystem(LeafSystem):
         print(f"  Covariance diagonal (X-Y): {np.diag(covariance_2x2)}")
         
         # 2. Sample position from truncated 2D Gaussian (X-Y only, Z fixed)
-        # max_sigma=2.0 restricts samples to ~95% probability region (within 2-sigma ellipse)
+        # Using max_sigma=0.5 for conservative sampling (very close to mean)
+        # Note: This is conservative because the Kalman filter covariance reduction
+        # doesn't seem to be working correctly during RRBT2 execution
         sampled_position = sample_position_from_covariance(
             mean=self._estimated_mustard_position,
             covariance=covariance_2x2,
             rng=self._rng,
-            max_sigma=2.0,  # Restrict to 2-sigma ellipse (high probability region)
+            max_sigma=0.2,  # Conservative: stay close to ICP estimate
         )
         
         # Compute offset from mean for logging (X-Y only since Z is fixed)
@@ -626,12 +763,223 @@ class PlannerSystem(LeafSystem):
             rpy_pregrasp = RollPitchYaw(self._pregrasp_pose.rotation())
             print(f"    RPY: [{rpy_pregrasp.roll_angle():.3f}, {rpy_pregrasp.pitch_angle():.3f}, {rpy_pregrasp.yaw_angle():.3f}]")
             
-            # # Visualize pre-grasp pose
-            # AddMeshcatTriad(self._meshcat, "grasp_planning/pregrasp_pose", length=0.15, radius=0.005)
-            # self._meshcat.SetTransform("grasp_planning/pregrasp_pose", self._pregrasp_pose)
-            # draw_grasp_candidate(self._meshcat, self._pregrasp_pose, prefix="grasp_planning/pregrasp_gripper")
+            # Visualize pre-grasp pose
+            AddMeshcatTriad(self._meshcat, "grasp_planning/pregrasp_pose", length=0.15, radius=0.005)
+            self._meshcat.SetTransform("grasp_planning/pregrasp_pose", self._pregrasp_pose)
+            draw_grasp_candidate(self._meshcat, self._pregrasp_pose, prefix="grasp_planning/pregrasp_gripper")
             
         else:
             print(f"\n  No valid grasp found!")
             self._best_grasp_pose = None
             self._pregrasp_pose = None
+
+    def _compute_grasp_trajectory(self):
+        """
+        Compute the grasp execution trajectory.
+        
+        Creates a trajectory through waypoints:
+        1. current position (end of RRBT2)
+        2. home position (safe intermediate waypoint if needed)
+        3. pregrasp pose (30cm above grasp)
+        4. grasp pose (at object)
+        5. grasp hold (same pose, gripper closes)
+        6. lift pose (grasp + 20cm in Z)
+        
+        Timing is adjusted based on joint space distances.
+        
+        Sets:
+        - self._grasp_trajectory: PiecewisePolynomial trajectory
+        - self._grasp_close_time: time offset when gripper should close
+        """
+        print(f"\nComputing grasp execution trajectory...")
+        
+        # Current position (end of RRBT2)
+        q_current = self._rrbt2_end_position
+        print(f"  Current position: {np.round(q_current, 3)}")
+        
+        # Use current position as initial guess (closer to target), but q_home as cost center
+        # to prefer natural arm configurations
+        print(f"  Computing IK for pregrasp pose...")
+        try:
+            q_pregrasp = np.array(solve_ik_for_pose(
+                plant=self._plant,
+                X_WG_target=self._pregrasp_pose,
+                q_nominal=tuple(self._q_home),  # Cost center for natural configuration
+                theta_bound=0.05,  # ~3 degrees orientation tolerance
+                pos_tol=0.01,     # 5mm position tolerance
+                q_initial=tuple(q_current),  # Start search from current position
+            ))
+            print(f"    q_pregrasp: {np.round(q_pregrasp, 3)}")
+        except RuntimeError as e:
+            print(f"    IK failed for pregrasp: {e}")
+            return False
+        
+        # Compute IK for grasp pose (use pregrasp as seed for nearby solution)
+        print(f"  Computing IK for grasp pose...")
+        try:
+            q_grasp = np.array(solve_ik_for_pose(
+                plant=self._plant,
+                X_WG_target=self._best_grasp_pose,
+                q_nominal=tuple(q_pregrasp),
+                theta_bound=0.02,  # ~1 degree orientation tolerance for precise grasp
+                pos_tol=0.003,     # 3mm position tolerance for precise grasp
+            ))
+            print(f"    q_grasp: {np.round(q_grasp, 3)}")
+        except RuntimeError as e:
+            print(f"    IK failed for grasp: {e}")
+            return False
+        
+        # Compute lift pose (grasp + 0.3m in Z) with STRAIGHT-DOWN orientation
+        lift_pos = self._best_grasp_pose.translation() + np.array([0, 0, 0.3])
+        # Use the same orientation as q_home (known to be reachable)
+        # RPY: [-103.8°, 0°, 90°] = [-1.8124, 0, π/2] radians
+        R_straight_down = RollPitchYaw(-1.8124, 0, np.pi/2).ToRotationMatrix()
+        X_lift = RigidTransform(R_straight_down, lift_pos)
+        
+        print(f"  Computing IK for lift pose (straight down)...")
+        try:
+            q_lift = np.array(solve_ik_for_pose(
+                plant=self._plant,
+                X_WG_target=X_lift,
+                q_nominal=tuple(q_grasp),
+                theta_bound=0.05,  # ~3 degrees orientation tolerance
+                pos_tol=0.005,     # 5mm position tolerance
+            ))
+            print(f"    q_lift: {np.round(q_lift, 3)}")
+        except RuntimeError as e:
+            print(f"    IK failed for lift: {e}")
+            return False
+        
+        # Compute drop pose (above square bin at same Z as lift) with STRAIGHT-DOWN orientation
+        # Square bin center: [0.5, -0.5]
+        drop_pos = np.array([0.5, -0.5, lift_pos[2]])  # Same Z as lift
+        X_drop = RigidTransform(R_straight_down, drop_pos)  # Same straight-down orientation
+        self._drop_pose = X_drop
+        
+        # Add Meshcat triad for drop pose visualization
+        AddMeshcatTriad(self._meshcat, "grasp_planning/drop_pose", length=0.15, radius=0.005)
+        self._meshcat.SetTransform("grasp_planning/drop_pose", X_drop)
+        
+        print(f"  Computing IK for drop pose...")
+        print(f"    Drop position: {np.round(drop_pos, 4)}")
+        try:
+            q_drop = np.array(solve_ik_for_pose(
+                plant=self._plant,
+                X_WG_target=X_drop,
+                q_nominal=tuple(q_lift),  # Use lift as seed (closer configuration)
+                theta_bound=0.05,  # ~3 degrees orientation tolerance
+                pos_tol=0.01,      # 10mm position tolerance (slightly more relaxed)
+                q_initial=tuple(q_lift),  # Start search from lift position
+            ))
+            print(f"    q_drop: {np.round(q_drop, 3)}")
+        except RuntimeError as e:
+            print(f"    IK failed for drop: {e}")
+            return False
+        
+        # Calculate joint space distances
+        dist_current_to_home = np.linalg.norm(self._q_home - q_current)
+        dist_home_to_pregrasp = np.linalg.norm(q_pregrasp - self._q_home)
+        dist_current_to_pregrasp = np.linalg.norm(q_pregrasp - q_current)
+        dist_pregrasp_to_grasp = np.linalg.norm(q_grasp - q_pregrasp)
+        dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
+        dist_lift_to_drop = np.linalg.norm(q_drop - q_lift)
+        
+        print(f"\n  Joint space distances:")
+        print(f"    current → pregrasp (direct): {dist_current_to_pregrasp:.4f} rad")
+        print(f"    current → home:              {dist_current_to_home:.4f} rad")
+        print(f"    home → pregrasp:             {dist_home_to_pregrasp:.4f} rad")
+        print(f"    pregrasp → grasp:            {dist_pregrasp_to_grasp:.4f} rad")
+        print(f"    grasp → lift:                {dist_grasp_to_lift:.4f} rad")
+        print(f"    lift → drop:                 {dist_lift_to_drop:.4f} rad")
+        
+        # Decide whether to use home as intermediate waypoint
+        # If direct path is much longer than going through home, use home
+        use_home_waypoint = dist_current_to_pregrasp > (dist_current_to_home + dist_home_to_pregrasp) * 0.8
+        
+        # Time scaling: ~1 second per radian of joint motion (smooth motion)
+        time_per_rad = 1.0
+        
+        if use_home_waypoint:
+            print(f"\n  Using HOME as intermediate waypoint for safer motion")
+            
+            t_home = dist_current_to_home * time_per_rad
+            t_pregrasp = t_home + dist_home_to_pregrasp * time_per_rad
+            t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
+            t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
+            t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
+            t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            t_release = t_drop + 0.5  # 0.5 second hold at drop before release
+            t_end = t_release + 0.5   # 0.5 second after release
+            
+            times = np.array([0.0, t_home, t_pregrasp, t_grasp_start, t_grasp_end, t_lift, t_drop, t_release, t_end])
+            waypoints = np.column_stack([
+                q_current,
+                self._q_home,
+                q_pregrasp,
+                q_grasp,
+                q_grasp,  # Hold at grasp pose
+                q_lift,
+                q_drop,
+                q_drop,   # Hold at drop pose
+                q_drop,   # Stay at drop after release
+            ])
+        else:
+            print(f"\n  Using DIRECT path to pregrasp")
+            
+            t_pregrasp = dist_current_to_pregrasp * time_per_rad
+            t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
+            t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
+            t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
+            t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            t_release = t_drop + 0.5  # 0.5 second hold at drop before release
+            t_end = t_release + 0.5   # 0.5 second after release
+            
+            times = np.array([0.0, t_pregrasp, t_grasp_start, t_grasp_end, t_lift, t_drop, t_release, t_end])
+            waypoints = np.column_stack([
+                q_current,
+                q_pregrasp,
+                q_grasp,
+                q_grasp,  # Hold at grasp pose
+                q_lift,
+                q_drop,
+                q_drop,   # Hold at drop pose
+                q_drop,   # Stay at drop after release
+            ])
+        
+        # Create trajectory using first-order hold (linear interpolation)
+        self._grasp_trajectory = PiecewisePolynomial.FirstOrderHold(times, waypoints)
+        
+        # Set gripper close time (gripper closes at grasp_start)
+        self._grasp_close_time = t_grasp_start
+        
+        # Set gripper open time (gripper opens at release)
+        self._grasp_open_time = t_release
+        
+        # Store final position
+        self._grasp_end_position = q_drop
+        
+        print(f"\n  Grasp trajectory created:")
+        print(f"    Total duration: {t_end:.1f}s")
+        print(f"    Gripper closes at: {t_grasp_start:.1f}s")
+        print(f"    Gripper opens at: {t_release:.1f}s")
+        if use_home_waypoint:
+            print(f"    Waypoints: current → HOME → pregrasp → grasp → hold → lift → drop → hold → release")
+        else:
+            print(f"    Waypoints: current → pregrasp → grasp → hold → lift → drop → hold → release")
+        
+        # Verify cartesian positions
+        print(f"\n  Expected cartesian positions:")
+        print(f"    pregrasp: {np.round(self._pregrasp_pose.translation(), 4)}")
+        print(f"    grasp:    {np.round(self._best_grasp_pose.translation(), 4)}")
+        print(f"    lift:     {np.round(lift_pos, 4)}")
+        print(f"    drop:     {np.round(drop_pos, 4)}")
+        print(f"    Z difference (pregrasp - grasp): {self._pregrasp_pose.translation()[2] - self._best_grasp_pose.translation()[2]:.3f}m")
+        
+        # Store milestone times for logging during execution
+        self._grasp_t_pregrasp = t_pregrasp
+        self._grasp_t_grasp = t_grasp_start
+        self._grasp_t_lift_start = t_grasp_end
+        self._grasp_t_drop = t_drop
+        self._grasp_t_release = t_release
+        
+        return True

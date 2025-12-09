@@ -12,7 +12,7 @@ directives:
 
 - add_model:
     name: camera0
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera0_origin
@@ -27,7 +27,7 @@ directives:
 
 - add_model:
     name: camera1
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera1_origin
@@ -42,7 +42,7 @@ directives:
 
 - add_model:
     name: camera2
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera2_origin
@@ -57,7 +57,7 @@ directives:
 
 - add_model:
     name: camera3
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera3_origin
@@ -72,7 +72,7 @@ directives:
 
 - add_model:
     name: camera4
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera4_origin
@@ -87,7 +87,7 @@ directives:
 
 - add_model:
     name: camera5
-    file: package://manipulation/camera_box.sdf
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/camera_box_no_collision.sdf
 
 - add_weld:
     parent: camera5_origin

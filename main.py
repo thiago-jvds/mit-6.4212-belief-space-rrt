@@ -44,7 +44,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 
 
 # Initialize numpy random generator for uniform random numbers
-np_rng = np.random.default_rng(seed=42)  # Fixed seed for reproducibility
+np_rng = np.random.default_rng(seed=31)  # Fixed seed for reproducibility
 
 
 def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng: np.random.Generator):        
@@ -207,11 +207,9 @@ def main():
         station.GetInputPort("iiwa.position")
     )
 
-    # Add WSG gripper source (constant open position)
-    wsg_position_source = builder.AddSystem(ConstantVectorSource([0.1]))
-    wsg_position_source.set_name("GripperPositionSource")
+    # Connect planner's gripper command to robot gripper
     builder.Connect(
-        wsg_position_source.get_output_port(),
+        planner.GetOutputPort("wsg_position_command"),
         station.GetInputPort("wsg.position")
     )
 

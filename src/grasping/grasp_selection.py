@@ -373,8 +373,9 @@ def compute_pregrasp_pose(grasp_pose: RigidTransform, offset_z: float = 0.3) -> 
     """
     Compute the pre-grasp pose from a grasp pose.
     
-    The pre-grasp pose is positioned above the grasp with the gripper pointing
-    straight down. This provides a safe approach trajectory.
+    The pre-grasp pose is positioned above the grasp with a STRAIGHT-DOWN
+    orientation (gripper pointing directly down). This allows a clean vertical
+    approach before rotating into the grasp orientation.
 
     Args:
         grasp_pose: The grasp pose (RigidTransform)
@@ -392,18 +393,13 @@ def compute_pregrasp_pose(grasp_pose: RigidTransform, offset_z: float = 0.3) -> 
         grasp_pos[2] + offset_z  # Above the grasp
     ])
 
-    # Pre-grasp orientation: gripper pointing straight down
-    # We want gripper Y-axis (approach direction) to align with world -Z (down)
-    # This is achieved by rotating -90 degrees about the world X-axis
-    #
-    # The rotation maps:
-    #   - Gripper X → World X:  [1, 0, 0] (fingers close horizontally)
-    #   - Gripper Y → World -Z: [0, 0, -1] (approach direction points down)
-    #   - Gripper Z → World Y:  [0, 1, 0] (finger length horizontal)
-    R_pregrasp = RotationMatrix(RollPitchYaw(-np.pi/2, 0, 0))
+    # Pre-grasp orientation: Use the same orientation as q_home (known to be reachable)
+    # This is approximately "straight down" with a slight forward tilt
+    # RPY: [-103.8°, 0°, 90°] = [-1.8124, 0, 1.5708] radians
+    R_straight_down = RollPitchYaw(-1.8124, 0, np.pi/2).ToRotationMatrix()
 
     # Create the pre-grasp RigidTransform
-    X_pregrasp = RigidTransform(R_pregrasp, pre_grasp_pos)
+    X_pregrasp = RigidTransform(R_straight_down, pre_grasp_pos)
 
     return X_pregrasp
 

@@ -55,7 +55,7 @@ planner:
   mustard_position_initial_uncertainty: 0.005  # Initial 3D covariance diagonal (0.01 = ~10cm std dev)
   mustard_position_max_uncertainty: 0.001    # Termination threshold for trace(Σ)
   mustard_position_lambda_weight: 1.0
-  mustard_position_max_iterations: 250
+  mustard_position_max_iterations: 100
   bias_prob_sample_q_mustard_position_light: 0.5
 
 

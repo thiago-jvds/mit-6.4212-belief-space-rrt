@@ -6,8 +6,8 @@ near its corresponding bin. The bar heights are proportional to the belief proba
 received from BeliefEstimatorSystem.
 
 Bar positions are computed from bin transforms:
-- Bar 0 position = X_W_bin0 * X_bin_chart (shows P(bin0), located near bin0)
-- Bar 1 position = X_W_bin1 * X_bin_chart (shows P(bin1), located near bin1)
+- Bar 0 position = X_W_bin0 * X_bin0_chart (shows P(bin0), located near bin0)
+- Bar 1 position = X_W_bin1 * X_bin1_chart (shows P(bin1), located near bin1)
 
 Bar colors change dynamically based on probability:
 - 0.0 → Red (low probability)
@@ -54,7 +54,8 @@ class BeliefBarChartSystem(LeafSystem):
         n_bins: int = 2,
         X_W_bin0: RigidTransform = None,
         X_W_bin1: RigidTransform = None,
-        X_bin_chart: RigidTransform = None,
+        X_bin0_chart: RigidTransform = None,
+        X_bin1_chart: RigidTransform = None,
         bar_width: float = 0.06,
         max_height: float = 0.2,
         publish_period: float = 0.02,
@@ -65,7 +66,8 @@ class BeliefBarChartSystem(LeafSystem):
             n_bins: Number of discrete hypothesis bins (default: 2)
             X_W_bin0: World-to-bin0 transform
             X_W_bin1: World-to-bin1 transform
-            X_bin_chart: Relative transform from bin frame to bar position
+            X_bin0_chart: Relative transform from bin0 frame to bar position
+            X_bin1_chart: Relative transform from bin1 frame to bar position
             bar_width: Width of each bar (meters)
             max_height: Maximum bar height when P=1.0 (meters)
             publish_period: Meshcat publish period in seconds
@@ -78,21 +80,19 @@ class BeliefBarChartSystem(LeafSystem):
         self._max_height = max_height
         
         # Compute world position for each bar (one bar per bin)
-        # Bar i is positioned near bin i
+        # Bar i is positioned near bin i with its own relative transform
         self._bar_positions = []
         
         bin_transforms = [X_W_bin0, X_W_bin1]
+        chart_offsets = [X_bin0_chart, X_bin1_chart]
+        
         for i in range(n_bins):
-            if bin_transforms[i] is not None and X_bin_chart is not None:
-                X_W_bar = bin_transforms[i].multiply(X_bin_chart)
+            # Apply bin-specific relative transform from bin frame to bar position
+            if bin_transforms[i] is not None and chart_offsets[i] is not None:
+                X_W_bar = bin_transforms[i].multiply(chart_offsets[i])
                 self._bar_positions.append(X_W_bar.translation())
             else:
-                # Fallback positions if transforms not provided
-                fallback = [
-                    np.array([-0.3, -0.5, 0.5]),
-                    np.array([0.5, 0.3, 0.5]),
-                ]
-                self._bar_positions.append(fallback[i])
+                raise ValueError(f"No transform provided for bin {i}")
         
         # Input port: belief vector from BeliefEstimatorSystem
         self._belief_port = self.DeclareVectorInputPort("belief", n_bins)

@@ -1,7 +1,7 @@
 simulation:
-  bin_light_center: [ 0.0, 1.0, 0.5 ]
+  bin_light_center: [ 0.5, 0.5, 0.5 ]
   bin_light_size: [ 0.25, 0.25, 0.25 ]
-  mustard_position_light_center: [ -1.0, 0.0, 0.5 ]
+  mustard_position_light_center: [ -0.5, -0.5, 0.5 ]
   mustard_position_light_size: [ 0.25, 0.25, 0.25 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   # Goal specified as end-effector pose in world frame
@@ -48,6 +48,15 @@ planner:
   # Biases
   bias_prob_sample_q_bin_light: 0.5
   bias_prob_sample_q_goal: 0.5
+
+  # Mustard position RRBT (second stage)
+  # After ICP gives us an estimate, we add artificial uncertainty
+  # and plan a path to the mustard position light region to reduce it
+  mustard_position_initial_uncertainty: 0.005  # Initial 3D covariance diagonal (0.01 = ~10cm std dev)
+  mustard_position_max_uncertainty: 0.001    # Termination threshold for trace(Σ)
+  mustard_position_lambda_weight: 1.0
+  mustard_position_max_iterations: 250
+  bias_prob_sample_q_mustard_position_light: 0.5
 
 
 # Visualization settings

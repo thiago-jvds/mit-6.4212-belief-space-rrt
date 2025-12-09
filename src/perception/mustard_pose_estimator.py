@@ -89,9 +89,6 @@ def segment_by_yellow(scene_xyzs, scene_rgbs):
     
     # Fallback if no points found with primary thresholds
     if xyz_yellow.shape[1] == 0:
-        print("  Warning: No yellow points found with primary thresholds!")
-        print("    Trying more inclusive fallback thresholds...")
-        
         mask_fallback = (
             (r_frac > 0.20) &
             (g_frac > 0.15) &
@@ -104,9 +101,6 @@ def segment_by_yellow(scene_xyzs, scene_rgbs):
         
         xyz_yellow = scene_xyzs[:, mask_fallback]
         rgb_yellow = scene_rgbs[:, mask_fallback]
-        
-        if xyz_yellow.shape[1] > 0:
-            print(f"    Found {xyz_yellow.shape[1]} points with fallback thresholds")
     
     # Outlier removal: keep main cluster (98th percentile)
     if xyz_yellow.shape[1] > 10:
@@ -125,13 +119,18 @@ class MustardPoseEstimatorSystem(LeafSystem):
     """
     LeafSystem that estimates mustard bottle pose from camera point clouds.
     
-    Takes 6 camera point clouds and belief as input. Based on MAP of belief,
-    selects cameras 0-2 (bin0) or cameras 3-5 (bin1), fuses point clouds,
-    segments yellow points, runs ICP, and outputs estimated pose.
+    Takes 6 camera point clouds, belief, and a trigger signal as input. 
+    Based on MAP of belief, selects cameras 0-2 (bin0) or cameras 3-5 (bin1), 
+    fuses point clouds, segments yellow points, runs ICP, and outputs estimated pose.
+    
+    IMPORTANT: This system only runs estimation when:
+    1. The estimation_trigger input is 1.0 (from BinBeliefEstimatorSystem)
+    2. Estimation has not already been completed
     
     Inputs:
         camera0_point_cloud through camera5_point_cloud: PointCloud from each camera
         belief: n_bins vector of bin probabilities
+        estimation_trigger: 1.0 when bin belief is confident, 0.0 otherwise
         
     Outputs:
         estimated_pose: RigidTransform of mustard bottle in world frame
@@ -170,6 +169,9 @@ class MustardPoseEstimatorSystem(LeafSystem):
         # Declare belief input port
         self._belief_port = self.DeclareVectorInputPort("belief", n_bins)
         
+        # Declare estimation trigger input port (from BinBeliefEstimatorSystem)
+        self._trigger_port = self.DeclareVectorInputPort("estimation_trigger", 1)
+        
         # Declare estimated pose output port
         self.DeclareAbstractOutputPort(
             "estimated_pose",
@@ -182,20 +184,34 @@ class MustardPoseEstimatorSystem(LeafSystem):
             AddMeshcatTriad(meshcat, "estimated_mustard_pose", length=0.1, radius=0.003)
     
     def CalcEstimatedPose(self, context, output):
-        """Calculate estimated pose based on MAP-selected cameras."""
-        # Only run estimation once (cache result)
+        """
+        Calculate estimated pose based on MAP-selected cameras.
+        
+        Only runs estimation when estimation_trigger input is 1.0.
+        Returns cached/identity pose otherwise to avoid expensive computation.
+        """
+        # Return cached result if estimation already completed
         if self._estimation_complete:
             output.set_value(self._cached_pose)
             return
         
-        # Get belief and compute MAP
+        # Check trigger from BinBeliefEstimatorSystem
+        trigger = self._trigger_port.Eval(context)[0]
+        
+        # Only run estimation when triggered (bin belief is confident)
+        if trigger < 0.5:
+            # Not triggered - return identity pose without running estimation
+            output.set_value(self._cached_pose)
+            return
+        
+        # Triggered - run estimation
         belief = self._belief_port.Eval(context)
         map_bin = np.argmax(belief)
         
         print(f"\n{'='*60}")
         print("POSE ESTIMATION (MustardPoseEstimatorSystem)")
         print(f"{'='*60}")
-        print(f"  Current belief: {belief}")
+        print(f"  Belief: {belief}")
         print(f"  MAP estimate: bin{map_bin}")
         
         # Select camera indices based on MAP

@@ -14,7 +14,7 @@ class NestedNamespace(SimpleNamespace):
                 self.__setattr__(key, value)
 
 
-def load_rrbt_config(filename="config.yaml"):
+def load_config(filename="config.yaml"):
     """
     Loads the YAML config and converts lists to numpy arrays where needed.
     """

@@ -1,3 +1,13 @@
+"""
+Simulation Tools for IIWA Robot Planning Problems
+
+This module provides:
+- ManipulationStationSim: Drake-based collision checking and visualization
+- IiwaProblem: Base class for IIWA planning problems
+- IiwaProblemBinBelief: Belief-space problem with discrete Bayes filter
+- IiwaProblemObjectPositionBelief: Belief-space problem with Kalman filter
+"""
+
 import numpy as np
 from pydrake.all import DiagramBuilder, Meshcat
 from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
@@ -8,7 +18,10 @@ from manipulation.exercises.trajectories.rrt_planner.robot import (
 )
 from manipulation.exercises.trajectories.rrt_planner.rrt_planning import Problem
 
-from src.estimation.bayes_filter import calculate_misclassification_risk
+from src.estimation.bayes_filter import (
+    calculate_misclassification_risk,
+    expected_posterior_all_bins,
+)
 
 
 class ManipulationStationSim:
@@ -169,13 +182,15 @@ class IiwaProblem(Problem):
 
 class IiwaProblemBinBelief(IiwaProblem):
     """
-    Belief-space planning problem using a discrete 3-bin Bayes filter.
+    Belief-space planning problem using a discrete n-bin Bayes filter.
     
     The sensor model uses TPR (True Positive Rate) and FPR (False Positive Rate)
     instead of Gaussian noise covariance matrices.
     
-    In light region: Informative sensor (TPR=0.8, FPR=0.15 by default)
+    In light region: Informative sensor (high TPR, low FPR)
     In dark region: Uninformative sensor (TPR=0.5, FPR=0.5 - coin flip)
+    
+    Implements the RRBTProblem protocol for use with RRBT_Tree and RRBT_tools.
     """
     
     def __init__(
@@ -203,18 +218,20 @@ class IiwaProblemBinBelief(IiwaProblem):
             light_size: Size of the light region [dx, dy, dz]
             tpr_light: True Positive Rate in light region (default 0.80)
             fpr_light: False Positive Rate in light region (default 0.15)
-            n_bins: Number of discrete hypothesis bins (default 3)
+            n_bins: Number of discrete hypothesis bins (default 2)
             true_bin: Ground truth bin index for simulation (default 0)
+            max_bin_uncertainty: Misclassification risk threshold for termination
+            lambda_weight: Trade-off between path length and uncertainty
         """
         super().__init__(
-            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
+            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=False
         )
 
         # Light region parameters
         self.light_center = light_center
         self.light_half = light_size / 2.0
 
-        # --- TPR/FPR SENSOR MODEL (replaces Kalman R matrices) ---
+        # --- TPR/FPR SENSOR MODEL ---
         # Light region: informative sensor
         self.tpr_light = tpr_light
         self.fpr_light = fpr_light
@@ -223,7 +240,7 @@ class IiwaProblemBinBelief(IiwaProblem):
         self.tpr_dark = 0.5
         self.fpr_dark = 0.5
         
-        # --- bins CONFIGURATION ---
+        # --- Bin configuration ---
         self.n_bins = n_bins
         self.true_bin = true_bin  # Ground truth for simulation
         self.max_bin_uncertainty = max_bin_uncertainty
@@ -253,19 +270,104 @@ class IiwaProblemBinBelief(IiwaProblem):
             return self.tpr_light, self.fpr_light
         else:
             return self.tpr_dark, self.fpr_dark  # Uninformative
+
+    # =========================================================================
+    # RRBTProblem Protocol Implementation
+    # =========================================================================
     
-    def node_reaches_goal(self, node, tol=None):
-        misclass_risk = calculate_misclassification_risk(node.belief)
-        if misclass_risk <= self.max_bin_uncertainty:
-            return True
-        return False
+    def get_initial_belief(self) -> np.ndarray:
+        """Return uniform prior over bins (maximum uncertainty)."""
+        return np.ones(self.n_bins) / self.n_bins
     
-    def cost_function(self, path_length: float, belief: np.ndarray) -> float:
+    def propagate_belief(self, parent_node, q_target: tuple) -> dict | None:
+        """
+        Propagate belief from parent_node to q_target using discrete Bayes filter.
+        
+        In light region: Uses expected_posterior_all_bins() to compute
+                        expected belief after measuring all bins
+        In dark region: Belief unchanged (uninformative measurements)
+        
+        Returns dict with 'belief', 'cost', 'path_length' or None if fails.
+        """
+        belief_parent = parent_node.belief
+
+        # Get sensor model (TPR, FPR) based on robot location
+        tpr, fpr = self.get_sensor_model(q_target)
+
+        # Update belief based on light/dark region
+        if self.is_in_light(q_target):
+            # In light: measure all bins (expected posterior for planning)
+            belief_new = expected_posterior_all_bins(
+                belief_parent, tpr, fpr, 
+                assumed_bin=self.true_bin
+            )
+        else:
+            # In dark: uninformative measurements, belief unchanged
+            belief_new = belief_parent.copy()
+        
+        # Compute path length increment
+        dist_increment = self.cspace.distance(parent_node.value, q_target)
+        path_length_new = parent_node.path_length + dist_increment
+        
+        # Compute combined cost
+        cost_new = self.compute_cost(path_length_new, belief_new)
+
+        return {
+            "belief": belief_new, 
+            "cost": cost_new,
+            "path_length": path_length_new,
+        }
+    
+    def compute_cost(self, path_length: float, belief: np.ndarray) -> float:
+        """
+        Compute combined cost = path_length + lambda * misclassification_risk
+        
+        Where misclassification_risk = 1 - max(belief)
+        """
         misclass_risk = calculate_misclassification_risk(belief)
         return path_length + self.lambda_weight * misclass_risk
+    
+    def node_reaches_goal(self, node, tol=None) -> bool:
+        """
+        Check if belief uncertainty is below threshold.
         
+        For belief-space planning, goal is achieved when misclassification
+        risk is low enough, NOT when robot reaches a geometric position.
+        """
+        misclass_risk = calculate_misclassification_risk(node.belief)
+        return misclass_risk <= self.max_bin_uncertainty
+    
+    def sample_goal_from_belief(self, node) -> np.ndarray:
+        """
+        Sample goal configuration from belief using MAP estimate.
+        
+        Returns the goal configuration associated with the most likely bin.
+        For now, returns the problem's goal configuration.
+        """
+        # Get the MAP estimate (bin with highest probability)
+        map_bin = np.argmax(node.belief)
+        
+        # For now, return the true goal configuration
+        # In a full implementation, this would return the bin-specific goal
+        return np.array(self.goal)
+    
+    # Legacy alias for backward compatibility
+    def cost_function(self, path_length: float, belief: np.ndarray) -> float:
+        """Alias for compute_cost (backward compatibility)."""
+        return self.compute_cost(path_length, belief)
 
-class IiwaProblemObjectPositionBelief(IiwaProblem):
+
+class IiwaProblemMustardPositionBelief(IiwaProblem):
+    """
+    Belief-space planning problem using Kalman filter for 2D (X-Y) position estimation.
+    
+    The belief is represented as a 2x2 covariance matrix over the mustard bottle's
+    X-Y position. The Z position is fixed (bottle sits on bin floor). The sensor
+    model uses different noise levels in light vs dark regions.
+    
+    Implements the RRBTProblem protocol for use with RRBT_Tree and RRBT_tools.
+    """
+    
     def __init__(
         self,
         q_start,
@@ -276,35 +378,54 @@ class IiwaProblemObjectPositionBelief(IiwaProblem):
         light_size,
         scale_R_light,
         scale_R_dark,
+        initial_uncertainty: float = 0.1,
+        max_uncertainty: float = 0.001,
+        lambda_weight: float = 1.0,
+        estimated_position: np.ndarray = None,
     ):
+        """
+        Args:
+            q_start: Starting joint configuration
+            q_goal: Goal joint configuration (not used for termination in belief planning)
+            gripper_setpoint: Gripper opening width
+            meshcat: Meshcat visualizer instance
+            light_center: Center of the light region [x, y, z]
+            light_size: Size of the light region [dx, dy, dz]
+            scale_R_light: Measurement noise scale in light region
+            scale_R_dark: Measurement noise scale in dark region
+            initial_uncertainty: Initial diagonal value for 2x2 covariance
+            max_uncertainty: Termination threshold for trace(Σ)
+            lambda_weight: Trade-off between path length and uncertainty
+            estimated_position: 3D position estimate from ICP (X-Y uncertain, Z fixed)
+        """
         super().__init__(
-            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=True
+            q_start, q_goal, gripper_setpoint, meshcat, is_visualizing=False
         )
 
         self.light_center = light_center
         self.light_half = light_size / 2.0
 
-        # --- PHYSICS CHANGES FOR ACTIVE PERCEPTION ---
-        # 1. State Transition (A=I)
-        # The target stays where it is.
-        self.A = np.eye(7)
-
-        # 2. Observation Matrix (C=I)
-        # If we see it, we see the full state (simplified).
-        self.C = np.eye(7)
-
-        # 3. Process Noise (Q=None)
-        # REMOVED self.Q because the target is static.
-
-        # 4. Sensor Noise
-
-        self.mustard_pos = q_goal
-
-        self.R_light = np.eye(7) * scale_R_light
-        self.R_dark = np.eye(7) * scale_R_dark
+        # --- 2D Kalman Filter Parameters (X-Y only) ---
+        # State Transition (A=I): Target is static
+        self.A = np.eye(2)
+        
+        # Observation Matrix (C=I): Full X-Y position observation
+        self.C = np.eye(2)
+        
+        # Measurement noise matrices (2x2, X-Y only)
+        self.R_light = np.eye(2) * scale_R_light
+        self.R_dark = np.eye(2) * scale_R_dark
+        
+        # Uncertainty parameters
+        self.initial_uncertainty = initial_uncertainty
+        self.max_uncertainty = max_uncertainty
+        self.lambda_weight = lambda_weight
+        
+        # 3D position estimate from ICP (X-Y uncertain, Z fixed)
+        self.estimated_position = estimated_position if estimated_position is not None else np.zeros(3)
 
     def is_in_light(self, q: tuple) -> bool:
-        # (Same as previous)
+        """Check if the gripper (camera) is in the light region."""
         plant = self.collision_checker.plant
         context = self.collision_checker.context_plant
         plant.SetPositions(context, plant.GetModelInstanceByName("iiwa"), np.array(q))
@@ -313,17 +434,87 @@ class IiwaProblemObjectPositionBelief(IiwaProblem):
         delta = np.abs(X_Cam.translation() - self.light_center)
         return np.all(delta <= self.light_half)
 
-    def get_dynamics_and_observation(self, q: tuple):
-        """Returns A, Q(None), C, R based on robot location q"""
+    def get_measurement_noise(self, q: tuple) -> np.ndarray:
+        """
+        Get measurement noise matrix R based on robot location.
+        
+        Returns:
+            R: 2x2 measurement noise matrix (X-Y only)
+        """
         if self.is_in_light(q):
-            R = self.R_light
+            return self.R_light
         else:
-            R = self.R_dark
-        return self.A, None, self.C, R
+            return self.R_dark
 
-    def node_reaches_goal(self, node, tol=None):
-        uncertainty = np.trace(node.sigma)
-        if uncertainty > self.MAX_UNCERTAINTY:
-            return False
-        return True
+    # =========================================================================
+    # RRBTProblem Protocol Implementation
+    # =========================================================================
     
+    def get_initial_belief(self) -> np.ndarray:
+        """Return initial 2x2 covariance matrix (high uncertainty in X-Y)."""
+        return np.eye(2) * self.initial_uncertainty
+    
+    def propagate_belief(self, parent_node, q_target: tuple) -> dict | None:
+        """
+        Propagate belief from parent_node to q_target using 2D Kalman filter.
+        
+        The belief is a 2x2 covariance matrix over the mustard X-Y position.
+        The mean (estimated_position) stays fixed; only covariance updates.
+        
+        Returns dict with 'belief', 'cost', 'path_length' or None if fails.
+        """
+        sigma_parent = parent_node.belief  # 2x2 covariance (X-Y)
+
+        # Get measurement noise based on light/dark region
+        R = self.get_measurement_noise(q_target)
+        C = self.C  # Identity 2x2
+
+        # Kalman filter covariance update
+        # (Mean stays fixed at ICP estimate, only covariance shrinks)
+        S = C @ sigma_parent @ C.T + R
+        try:
+            K = sigma_parent @ C.T @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            return None
+
+        sigma_new = (np.eye(2) - K @ C) @ sigma_parent
+        
+        # Compute path length increment
+        dist_increment = self.cspace.distance(parent_node.value, q_target)
+        path_length_new = parent_node.path_length + dist_increment
+        
+        # Compute combined cost
+        cost_new = self.compute_cost(path_length_new, sigma_new)
+
+        return {
+            "belief": sigma_new, 
+            "cost": cost_new,
+            "path_length": path_length_new,
+        }
+    
+    def compute_cost(self, path_length: float, belief: np.ndarray) -> float:
+        """
+        Compute combined cost = path_length + lambda * trace(Σ)
+        
+        Where Σ is the 2x2 position covariance (X-Y only).
+        """
+        trace_sigma = np.trace(belief)
+        return path_length + self.lambda_weight * trace_sigma
+    
+    def node_reaches_goal(self, node, tol=None) -> bool:
+        """
+        Check if belief uncertainty is below threshold.
+        
+        Goal is achieved when trace(Σ) < max_uncertainty.
+        """
+        uncertainty = np.trace(node.belief)
+        return uncertainty <= self.max_uncertainty
+    
+    def sample_goal_from_belief(self, node) -> np.ndarray:
+        """
+        Return the estimated 3D position from belief.
+        
+        Since the mean is fixed at the ICP estimate and we only track
+        covariance, we return the estimated_position directly.
+        """
+        return self.estimated_position.copy()

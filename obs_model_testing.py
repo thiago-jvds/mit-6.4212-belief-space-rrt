@@ -34,7 +34,7 @@ from pydrake.all import (
 )
 from pydrake.multibody.math import SpatialVelocity
 from src.perception.light_and_dark import BinLightDarkRegionSensorSystem
-from src.utils.config_loader import load_rrbt_config
+from src.utils.config_loader import load_config
 from src.planning.standard_rrt import rrt_planning
 from src.simulation.simulation_tools import IiwaProblem
 from src.utils.ik_solver import solve_ik_for_pose
@@ -1468,7 +1468,7 @@ def main():
     print("=" * 60)
 
     # Load configuration
-    config = load_rrbt_config()
+    config = load_config()
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
     print(

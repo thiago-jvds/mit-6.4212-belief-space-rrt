@@ -25,9 +25,9 @@ import sys
 sys.path.append(os.getcwd())
 
 from src.perception.light_and_dark import BinLightDarkRegionSensorSystem
-from src.estimation.belief_estimator import BeliefEstimatorSystem
+from src.estimation.belief_estimator import BinBeliefEstimatorSystem
 from src.visualization.belief_visualizer import BeliefVisualizerSystem
-from src.utils.config_loader import load_rrbt_config
+from src.utils.config_loader import load_config
 
 
 def generate_diagram(output_file="system_diagram.png"):
@@ -35,7 +35,7 @@ def generate_diagram(output_file="system_diagram.png"):
     
     # Load configuration
     try:
-        config = load_rrbt_config()
+        config = load_config()
     except Exception as e:
         print(f"Error loading config: {e}")
         return
@@ -107,7 +107,7 @@ def generate_diagram(output_file="system_diagram.png"):
     # ====== Estimation System (BeliefEstimatorSystem) ======
     # Receives measurement variance from LightDarkRegionSystem (single source of truth)
     belief_estimator = builder.AddSystem(
-        BeliefEstimatorSystem()
+        BinBeliefEstimatorSystem()
     )
     belief_estimator.set_name("BeliefEstimator")
     

@@ -21,6 +21,7 @@ directives:
     child: iiwa::iiwa_link_0
     X_PC:
       translation: [ 0.0, 0.0, 0.0 ]
+      rotation: !Rpy { deg: [ 0, 0, 0 ] }
 
 # 3. Add the WSG Gripper
 - add_model:

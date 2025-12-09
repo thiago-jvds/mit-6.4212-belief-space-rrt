@@ -124,7 +124,6 @@ class BinLightDarkRegionSensorSystem(LeafSystem):
             output.SetFromVector([self._tpr_dark, self._fpr_dark])
 
 
-
 class MustardPositionLightDarkRegionSensorSystem(LeafSystem):
     """
     System simulating a light and dark regions' for a mustard bottle position estimation.

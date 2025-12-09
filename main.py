@@ -36,8 +36,10 @@ from src.perception.light_and_dark import BinLightDarkRegionSensorSystem, Mustar
 from src.perception.mustard_pose_estimator import MustardPoseEstimatorSystem
 from src.planning.planner_system import PlannerSystem, PlannerState
 from src.visualization.belief_bar_chart import BeliefBarChartSystem
-from src.estimation.belief_estimator import BeliefEstimatorSystem
-from src.utils.config_loader import load_rrbt_config
+from src.visualization.covariance_ellipsoid import CovarianceEllipsoidSystem
+from src.estimation.belief_estimator import BinBeliefEstimatorSystem
+from src.estimation.mustard_position_estimator import MustardPositionBeliefEstimatorSystem
+from src.utils.config_loader import load_config
 from src.utils.camera_pose_manager import restore_camera_pose
 
 
@@ -82,7 +84,7 @@ def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin
     box_height = 0.02  # Thin box to show the XY region at the drop height
 
     init_space_box = Box(box_width, box_depth, box_height)
-    meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
+    # meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
 
     # Position the box at the center of the initialization region (relative to bin)
     box_center_in_bin = [
@@ -127,7 +129,7 @@ def main():
     print("=" * 60)
 
     # Load configuration
-    config = load_rrbt_config()
+    config = load_config()
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
     print(
@@ -187,11 +189,13 @@ def main():
     # Define relative transform from bin frame to chart position
     # "Top right edge" of bin: positive X (forward), negative Y (right), raised Z
     # Bin dimensions are roughly 0.6m x 0.4m, so offset to corner and above
-    X_bin_chart = RigidTransform([-0.23, -0.28, 0.21])
+    X_bin0_chart = RigidTransform([-0.22, 0.29, 0.21])
+    X_bin1_chart = RigidTransform([-0.22, -0.29, 0.21])
     
     print(f"  Bin0 position: {X_W_bin0.translation()}")
     print(f"  Bin1 position: {X_W_bin1.translation()}")
-    print(f"  Chart offset from bin: {X_bin_chart.translation()}")
+    print(f"  Chart offset from bin0: {X_bin0_chart.translation()}")
+    print(f"  Chart offset from bin1: {X_bin1_chart.translation()}")
 
     # Add PlannerSystem (replaces ConstantVectorSource)
     planner = builder.AddSystem(PlannerSystem(plant, config, meshcat, scenario_path))
@@ -249,12 +253,13 @@ def main():
     # Note: true_bin will be set after we randomly choose it
     # For now, use a placeholder value - it will be updated via configure
     belief_estimator = builder.AddSystem(
-        BeliefEstimatorSystem(
+        BinBeliefEstimatorSystem(
             n_bins=2,
             true_bin=0,  # Placeholder, will be updated
+            max_bin_uncertainty=float(config.planner.max_bin_uncertainty),
         )
     )
-    belief_estimator.set_name("BeliefEstimator")
+    belief_estimator.set_name("BinBeliefEstimator")
     
     # Connect estimator to perception's sensor_model output
     builder.Connect(
@@ -269,7 +274,10 @@ def main():
             n_bins=2,
             X_W_bin0=X_W_bin0,
             X_W_bin1=X_W_bin1,
-            X_bin_chart=X_bin_chart,
+            X_bin0_chart=X_bin0_chart,
+            X_bin1_chart=X_bin1_chart,
+            max_height=0.15,
+            bar_width=0.05,
         )
     )
     belief_viz.set_name("BeliefBarChart")
@@ -320,12 +328,76 @@ def main():
     )
     print("    Connected belief to pose estimator")
 
+    # Connect belief_confident trigger to pose estimator
+    # This triggers ICP estimation only when bin belief is confident
+    builder.Connect(
+        belief_estimator.GetOutputPort("belief_confident"),
+        pose_estimator.GetInputPort("estimation_trigger")
+    )
+    print("    Connected belief_confident trigger to pose estimator")
+
     # Connect pose estimator to planner
     builder.Connect(
         pose_estimator.GetOutputPort("estimated_pose"),
         planner.GetInputPort("estimated_mustard_pose")
     )
     print("    Connected pose estimator to planner")
+
+    # ============================================================
+    # ADD MUSTARD POSITION BELIEF ESTIMATOR (3D Kalman Filter)
+    # ============================================================
+    print("  Adding MustardPositionBeliefEstimatorSystem...")
+    mustard_belief_estimator = builder.AddSystem(
+        MustardPositionBeliefEstimatorSystem(
+            initial_uncertainty=float(config.planner.mustard_position_initial_uncertainty),
+        )
+    )
+    mustard_belief_estimator.set_name("MustardPositionBeliefEstimator")
+
+    # Connect measurement variance from perception
+    builder.Connect(
+        mustard_position_perception_sys.GetOutputPort("measurement_variance"),
+        mustard_belief_estimator.GetInputPort("measurement_variance")
+    )
+    print("    Connected measurement_variance from MustardPositionPerception")
+
+    # Connect estimated pose from ICP (for initial position)
+    builder.Connect(
+        pose_estimator.GetOutputPort("estimated_pose"),
+        mustard_belief_estimator.GetInputPort("estimated_pose")
+    )
+    print("    Connected estimated_pose from MustardPoseEstimator")
+
+    # ============================================================
+    # ADD COVARIANCE ELLIPSOID VISUALIZER
+    # ============================================================
+    print("  Adding CovarianceEllipsoidSystem...")
+    covariance_viz = builder.AddSystem(
+        CovarianceEllipsoidSystem(
+            meshcat=meshcat,
+            scale_factor=3.0,  # 3-sigma ellipsoid
+            color=Rgba(1.0, 0.0, 0.0, 0.5),  # Red with 50% transparency
+        )
+    )
+    covariance_viz.set_name("CovarianceEllipsoid")
+
+    # Connect position and covariance from belief estimator
+    builder.Connect(
+        mustard_belief_estimator.GetOutputPort("position_mean"),
+        covariance_viz.GetInputPort("position")
+    )
+    builder.Connect(
+        mustard_belief_estimator.GetOutputPort("covariance"),
+        covariance_viz.GetInputPort("covariance")
+    )
+    print("    Connected position and covariance to ellipsoid visualizer")
+
+    # Connect covariance to planner for grasp planning
+    builder.Connect(
+        mustard_belief_estimator.GetOutputPort("covariance"),
+        planner.GetInputPort("position_covariance")
+    )
+    print("    Connected covariance to planner for grasp planning")
 
     # Build the diagram
     diagram = builder.Build()
@@ -350,11 +422,11 @@ def main():
             "bin_light_region_indicator",
             RigidTransform(RotationMatrix(), config.simulation.bin_light_center),
         )
-        # Visualize mustard position light region indicator
+        # Visualize mustard position light region indicator (orange to distinguish)
         meshcat.SetObject(
             "mustard_position_light_region_indicator",
             Box(*config.simulation.mustard_position_light_size),
-            Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
+            Rgba(1.0, 0.5, 0.0, 0.3),  # Orange, 0.3 Alpha
         )
         meshcat.SetTransform(
             "mustard_position_light_region_indicator",

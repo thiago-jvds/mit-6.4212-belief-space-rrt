@@ -1,5 +1,5 @@
 """
-BeliefEstimatorSystem - A Drake LeafSystem for discrete Bayes Filter estimation.
+BinBeliefEstimatorSystem - A Drake LeafSystem for discrete Bayes Filter estimation.
 
 This system maintains and updates the belief state (probability vector) based on
 TPR/FPR sensor model from the LightDarkRegionSystem. It implements the estimation
@@ -9,7 +9,10 @@ Single Source of Truth: Sensor parameters (TPR/FPR) are NOT duplicated here.
 Instead, the system receives the current sensor model from the upstream
 LightDarkRegionSystem, which is the single source of truth for sensor parameters.
 
-Belief State: [P(A), P(B), P(C)] - probability that object is in each bin.
+Belief State: [P(A), P(B)] - probability that object is in each bin.
+
+Outputs a "belief_confident" signal (1.0) when misclassification risk drops below
+the configured threshold, which can trigger downstream pose estimation.
 """
 
 import numpy as np
@@ -17,10 +20,10 @@ from pydrake.all import (
     LeafSystem,
     BasicVector,
 )
-from src.estimation.bayes_filter import bayes_update_all_bins
+from src.estimation.bayes_filter import bayes_update_all_bins, calculate_misclassification_risk
 
 
-class BeliefEstimatorSystem(LeafSystem):
+class BinBeliefEstimatorSystem(LeafSystem):
     """
     A Drake System that maintains discrete Bayes Filter belief state.
     
@@ -29,6 +32,7 @@ class BeliefEstimatorSystem(LeafSystem):
     - Maintains belief vector as discrete state
     - Updates belief via Bayes Filter when in light region
     - Outputs current belief for downstream systems (e.g., visualization)
+    - Outputs a "belief_confident" signal when uncertainty is below threshold
     
     Inputs:
         sensor_model (2D): [TPR, FPR] from LightDarkRegionSystem
@@ -36,7 +40,8 @@ class BeliefEstimatorSystem(LeafSystem):
             - In dark: uninformative (TPR=0.5, FPR=0.5)
         
     Outputs:
-        belief (n_bins D): Probability vector [P(A), P(B), P(C)]
+        belief (n_bins D): Probability vector [P(bin0), P(bin1)]
+        belief_confident (1D): 1.0 if misclassification_risk < threshold, else 0.0
         
     Discrete State:
         belief (n_bins elements): Probability distribution over hypotheses
@@ -44,20 +49,23 @@ class BeliefEstimatorSystem(LeafSystem):
     
     def __init__(
         self,
-        n_bins: int = 3,
+        n_bins: int = 2,
         true_bin: int = 0,
+        max_bin_uncertainty: float = 0.01,
         update_period: float = 0.01,
     ):
         """
         Args:
-            n_bins: Number of discrete hypothesis bins (default: 3)
+            n_bins: Number of discrete hypothesis bins (default: 2)
             true_bin: Ground truth bin index for simulation (default: 0)
+            max_bin_uncertainty: Threshold for misclassification risk to be "confident"
             update_period: Bayes filter update period in seconds
         """
         LeafSystem.__init__(self)
         
         self._n_bins = n_bins
         self._true_bin = true_bin
+        self._max_bin_uncertainty = max_bin_uncertainty
         
         # Input port: sensor model [TPR, FPR] from LightDarkRegionSystem
         self._sensor_port = self.DeclareVectorInputPort("sensor_model", 2)
@@ -74,6 +82,13 @@ class BeliefEstimatorSystem(LeafSystem):
             self._CalcBelief,
         )
         
+        # Output port: belief confident signal (1.0 when uncertainty < threshold)
+        self.DeclareVectorOutputPort(
+            "belief_confident",
+            1,
+            self._CalcBeliefConfident,
+        )
+        
         # Periodic discrete update for Bayes Filter belief propagation
         self.DeclarePeriodicDiscreteUpdateEvent(
             period_sec=update_period,
@@ -85,6 +100,21 @@ class BeliefEstimatorSystem(LeafSystem):
         """Output the current belief vector."""
         belief = context.get_discrete_state(self._belief_state_index).get_value()
         output.SetFromVector(belief)
+    
+    def _CalcBeliefConfident(self, context, output):
+        """
+        Output 1.0 if belief is confident (misclassification risk < threshold).
+        
+        This signal can be used to trigger downstream pose estimation.
+        misclassification_risk = 1 - max(belief)
+        """
+        belief = context.get_discrete_state(self._belief_state_index).get_value()
+        misclass_risk = calculate_misclassification_risk(belief)
+        
+        if misclass_risk <= self._max_bin_uncertainty:
+            output.SetFromVector([1.0])
+        else:
+            output.SetFromVector([0.0])
     
     def _DoBayesUpdate(self, context, discrete_state):
         """

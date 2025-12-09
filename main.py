@@ -186,7 +186,7 @@ def main():
     # Define relative transform from bin frame to chart position
     # "Top right edge" of bin: positive X (forward), negative Y (right), raised Z
     # Bin dimensions are roughly 0.6m x 0.4m, so offset to corner and above
-    X_bin_chart = RigidTransform([-0.2, -0.28, 0.55])
+    X_bin_chart = RigidTransform([-0.23, -0.28, 0.21])
     
     print(f"  Bin0 position: {X_W_bin0.translation()}")
     print(f"  Bin1 position: {X_W_bin1.translation()}")

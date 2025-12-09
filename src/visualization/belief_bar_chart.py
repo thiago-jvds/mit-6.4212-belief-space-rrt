@@ -56,7 +56,7 @@ class BeliefBarChartSystem(LeafSystem):
         X_W_bin1: RigidTransform = None,
         X_bin_chart: RigidTransform = None,
         bar_width: float = 0.06,
-        max_height: float = 0.4,
+        max_height: float = 0.2,
         publish_period: float = 0.02,
     ):
         """

@@ -14,7 +14,7 @@ import numpy as np
 from pydrake.all import LeafSystem, MultibodyPlant
 
 
-class LightDarkRegionSystem(LeafSystem):
+class LightDarkRegionSensorSystem(LeafSystem):
     """
     System simulating 'light and dark regions' for a camera-mounted robot.
 

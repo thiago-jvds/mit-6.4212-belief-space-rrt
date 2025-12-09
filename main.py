@@ -17,7 +17,7 @@ Then open http://localhost:7000 in your browser.
 
 import numpy as np
 from pathlib import Path
-from manipulation.station import MakeHardwareStation, LoadScenario
+from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
 from manipulation.meshcat_utils import AddMeshcatTriad
 from pydrake.all import (
     DiagramBuilder,
@@ -32,7 +32,8 @@ from pydrake.all import (
     RollPitchYaw,
 )
 import argparse
-from src.perception.light_and_dark import LightDarkRegionSystem
+from src.perception.light_and_dark import LightDarkRegionSensorSystem
+from src.perception.mustard_pose_estimator import MustardPoseEstimatorSystem
 from src.planning.planner_system import PlannerSystem, PlannerState
 from src.visualization.belief_bar_chart import BeliefBarChartSystem
 from src.estimation.belief_estimator import BeliefEstimatorSystem
@@ -212,7 +213,7 @@ def main():
 
     # Add Perception System (LightDarkRegionSystem)
     perception_sys = builder.AddSystem(
-        LightDarkRegionSystem(
+        LightDarkRegionSensorSystem(
             plant=plant,
             light_region_center=config.simulation.light_center,
             light_region_size=config.simulation.light_size,
@@ -262,6 +263,53 @@ def main():
         belief_estimator.GetOutputPort("belief"),
         belief_viz.GetInputPort("belief")
     )
+
+    # ============================================================
+    # ADD POINT CLOUD GENERATION FROM CAMERAS
+    # ============================================================
+    print("  Adding point cloud generation from cameras...")
+    to_point_cloud = AddPointClouds(
+        scenario=scenario,
+        station=station,
+        builder=builder,
+        meshcat=meshcat,
+    )
+    print(f"    Added point cloud converters for: {list(to_point_cloud.keys())}")
+
+    # ============================================================
+    # ADD MUSTARD POSE ESTIMATOR SYSTEM
+    # ============================================================
+    print("  Adding MustardPoseEstimatorSystem...")
+    pose_estimator = builder.AddSystem(
+        MustardPoseEstimatorSystem(meshcat=meshcat, n_bins=2)
+    )
+    pose_estimator.set_name("MustardPoseEstimator")
+
+    # Connect camera point clouds to pose estimator
+    for i in range(6):
+        camera_name = f"camera{i}"
+        if camera_name in to_point_cloud:
+            builder.Connect(
+                to_point_cloud[camera_name].get_output_port(),
+                pose_estimator.GetInputPort(f"camera{i}_point_cloud")
+            )
+            print(f"    Connected {camera_name} point cloud")
+        else:
+            print(f"    WARNING: {camera_name} not found in point cloud converters!")
+
+    # Connect belief to pose estimator
+    builder.Connect(
+        belief_estimator.GetOutputPort("belief"),
+        pose_estimator.GetInputPort("belief")
+    )
+    print("    Connected belief to pose estimator")
+
+    # Connect pose estimator to planner
+    builder.Connect(
+        pose_estimator.GetOutputPort("estimated_pose"),
+        planner.GetInputPort("estimated_mustard_pose")
+    )
+    print("    Connected pose estimator to planner")
 
     # Build the diagram
     diagram = builder.Build()

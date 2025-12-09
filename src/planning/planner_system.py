@@ -15,6 +15,7 @@ import numpy as np
 from pydrake.all import (
     LeafSystem,
     BasicVector,
+    AbstractValue,
     PiecewisePolynomial,
     RigidTransform,
     RotationMatrix,
@@ -32,6 +33,7 @@ class PlannerState(Enum):
     IDLE = auto()              # Waiting for setup
     RRBT_PLANNING = auto()     # Running RRBT (blocking)
     RRBT_EXECUTING = auto()    # Playing RRBT trajectory
+    POSE_ESTIMATION = auto()   # Running pose estimation from point clouds
     RRT_PLANNING = auto()      # Running RRT (blocking)
     RRT_EXECUTING = auto()     # Playing RRT trajectory
     COMPLETE = auto()          # Done, holding at goal
@@ -118,6 +120,15 @@ class PlannerSystem(LeafSystem):
         # Compute q_goal and q_light_hint via IK
         self._compute_ik_targets()
         
+        # Instance variable to store the estimated mustard pose
+        self._estimated_mustard_pose = None
+        
+        # Input port: estimated mustard pose from MustardPoseEstimatorSystem
+        self._pose_input_port = self.DeclareAbstractInputPort(
+            "estimated_mustard_pose",
+            AbstractValue.Make(RigidTransform())
+        )
+        
         # Output port
         self.DeclareVectorOutputPort(
             "iiwa_position_command",
@@ -185,17 +196,32 @@ class PlannerSystem(LeafSystem):
         elif self._state == PlannerState.RRBT_EXECUTING:
             t_traj = t - self._rrbt_start_time
             if t_traj >= self._rrbt_trajectory.end_time():
-                # RRBT trajectory complete, transition to RRT planning
+                # RRBT trajectory complete, transition to POSE_ESTIMATION
                 self._rrbt_end_position = self._rrbt_trajectory.value(
                     self._rrbt_trajectory.end_time()
                 ).flatten()
-                self._state = PlannerState.RRT_PLANNING
+                self._state = PlannerState.POSE_ESTIMATION
                 print(f"\nRRBT execution complete at t={t:.2f}s")
                 print(f"  End position: {np.round(self._rrbt_end_position, 3)}")
                 output.SetFromVector(self._rrbt_end_position)
             else:
                 q = self._rrbt_trajectory.value(t_traj).flatten()
                 output.SetFromVector(q)
+        
+        elif self._state == PlannerState.POSE_ESTIMATION:
+            # Read estimated pose from input port (triggers MustardPoseEstimatorSystem)
+            print(f"\n{'='*60}")
+            print("POSE ESTIMATION PHASE")
+            print(f"{'='*60}")
+            
+            self._estimated_mustard_pose = self._pose_input_port.Eval(context)
+            
+            print(f"  Estimated mustard pose received:")
+            print(f"    Translation: {self._estimated_mustard_pose.translation()}")
+            
+            # Transition to RRT planning
+            self._state = PlannerState.RRT_PLANNING
+            output.SetFromVector(self._rrbt_end_position)
                 
         elif self._state == PlannerState.RRT_PLANNING:
             # Run RRT from RRBT endpoint to predicted goal (blocking)

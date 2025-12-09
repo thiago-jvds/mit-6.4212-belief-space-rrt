@@ -44,7 +44,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 
 
 # Initialize numpy random generator for uniform random numbers
-np_rng = np.random.default_rng(seed=31)  # Fixed seed for reproducibility
+np_rng = np.random.default_rng(seed=19)  # Fixed seed for reproducibility
 
 
 def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng: np.random.Generator):        
@@ -294,9 +294,16 @@ def main():
         scenario=scenario,
         station=station,
         builder=builder,
-        meshcat=meshcat,
+        meshcat=None,  # Don't visualize continuously - we'll do it once
     )
     print(f"    Added point cloud converters for: {list(to_point_cloud.keys())}")
+    
+    # Export point cloud ports for one-time visualization
+    point_cloud_output_ports = {}
+    for camera_name, converter in to_point_cloud.items():
+        port_name = f"{camera_name}_point_cloud"
+        builder.ExportOutput(converter.get_output_port(), port_name)
+        point_cloud_output_ports[camera_name] = port_name
 
     # ============================================================
     # ADD MUSTARD POSE ESTIMATOR SYSTEM
@@ -479,10 +486,24 @@ def main():
     print()
 
     # Run simulation loop
+    point_clouds_visualized = False
     try:
         while True:
             current_time = simulator.get_context().get_time()
             simulator.AdvanceTo(current_time + 0.1)
+            
+            # Visualize point clouds once after first step
+            if not point_clouds_visualized:
+                sim_context = simulator.get_context()
+                for camera_name, port_name in point_cloud_output_ports.items():
+                    pcl = diagram.GetOutputPort(port_name).Eval(sim_context)
+                    meshcat.SetObject(
+                        f"{camera_name}.cloud",
+                        pcl,
+                        point_size=0.003,
+                    )
+                print("  Point clouds visualized (one-time)")
+                point_clouds_visualized = True
             
             # Check if planning and execution are complete
             if planner.is_complete():

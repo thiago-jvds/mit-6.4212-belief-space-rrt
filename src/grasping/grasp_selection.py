@@ -276,9 +276,9 @@ def GenerateAntipodalGraspCandidateDebug(
         return np.inf, None, "collision_cloud"
 
 
-def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, debug=False):
+def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, num_to_return=10, debug=False):
     """
-    Sample grasp candidates and select the best one.
+    Sample grasp candidates and return the best ones sorted by cost.
 
     Args:
         meshcat: Meshcat instance for visualization
@@ -286,11 +286,11 @@ def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, de
         rng: numpy random generator
         num_candidates: Number of grasp candidates to sample
         num_to_draw: Number of top grasps to visualize
+        num_to_return: Number of top candidates to return for IK validation
         debug: If True, print debug info for first few candidates
 
     Returns:
-        best_X_G: The best grasp pose, or None if no valid grasp found
-        best_cost: The cost of the best grasp
+        List of (cost, X_G) tuples sorted by cost (best first), or empty list if none found
     """
     print(f"\n  Sampling {num_candidates} grasp candidates...")
 
@@ -351,7 +351,7 @@ def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, de
 
     if len(costs) == 0:
         print("  No valid grasp candidates found!")
-        return None, np.inf
+        return []
 
     # Sort by cost and get best candidates
     indices = np.asarray(costs).argsort()
@@ -365,8 +365,11 @@ def select_best_grasp(meshcat, cloud, rng, num_candidates=100, num_to_draw=5, de
             print(f"    {rank+1}. Cost: {costs[idx]:.3f}")
             draw_grasp_candidate(meshcat, X_Gs[idx], prefix=f"grasp_{rank+1}_best")
 
-    best_idx = indices[0]
-    return X_Gs[best_idx], costs[best_idx]
+    # Return top N candidates as list of (cost, X_G) tuples
+    top_k_to_return = min(num_to_return, len(indices))
+    candidates = [(costs[indices[i]], X_Gs[indices[i]]) for i in range(top_k_to_return)]
+    print(f"\n  Returning {len(candidates)} grasp candidates for IK validation")
+    return candidates
 
 
 def compute_pregrasp_pose(grasp_pose: RigidTransform, offset_z: float = 0.3) -> RigidTransform:
@@ -393,13 +396,9 @@ def compute_pregrasp_pose(grasp_pose: RigidTransform, offset_z: float = 0.3) -> 
         grasp_pos[2] + offset_z  # Above the grasp
     ])
 
-    # Pre-grasp orientation: Use the same orientation as q_home (known to be reachable)
-    # This is approximately "straight down" with a slight forward tilt
-    # RPY: [-103.8°, 0°, 90°] = [-1.8124, 0, 1.5708] radians
-    R_straight_down = RollPitchYaw(-1.8124, 0, np.pi/2).ToRotationMatrix()
-
-    # Create the pre-grasp RigidTransform
-    X_pregrasp = RigidTransform(R_straight_down, pre_grasp_pos)
+    # Pre-grasp orientation: Use the SAME orientation as the grasp
+    # This ensures smooth approach - just descend straight down to grasp
+    X_pregrasp = RigidTransform(grasp_pose.rotation(), pre_grasp_pos)
 
     return X_pregrasp
 

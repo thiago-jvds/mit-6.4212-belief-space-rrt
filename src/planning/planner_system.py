@@ -163,6 +163,7 @@ class PlannerSystem(LeafSystem):
         # Grasp planning results
         self._best_grasp_pose = None
         self._pregrasp_pose = None
+        self._grasp_candidates = []  # List of (cost, X_G) tuples for IK validation
         self._rng = np.random.default_rng()  # Random generator for grasp sampling
         
         # Grasp execution variables
@@ -181,7 +182,7 @@ class PlannerSystem(LeafSystem):
         self._gripper_body = self._plant.GetBodyByName("body", self._plant.GetModelInstanceByName("wsg"))
         
         # Add Meshcat triad for gripper visualization
-        AddMeshcatTriad(self._meshcat, "gripper_frame", length=0.1, radius=0.004)
+        # AddMeshcatTriad(self._meshcat, "gripper_frame", length=0.1, radius=0.004)
         
         # Output port: joint position command
         self.DeclareVectorOutputPort(
@@ -319,8 +320,8 @@ class PlannerSystem(LeafSystem):
             print(f"{'='*60}")
             self._run_grasp_planning(context)
             
-            if self._best_grasp_pose is not None:
-                # Compute grasp execution trajectory
+            if self._grasp_candidates:
+                # Compute grasp execution trajectory (validates IK for each candidate)
                 if self._compute_grasp_trajectory():
                     # Transition to grasp execution
                     self._grasp_start_time = t
@@ -332,11 +333,11 @@ class PlannerSystem(LeafSystem):
                     print(f"  Starting grasp execution at t={t:.2f}s")
                     print(f"  Trajectory duration: {self._grasp_trajectory.end_time():.1f}s")
                 else:
-                    # IK failed, skip to complete
-                    print(f"  Grasp trajectory computation failed, skipping execution")
+                    # All candidates failed IK, skip to complete
+                    print(f"  All grasp candidates failed IK, skipping execution")
                     self._state = PlannerState.COMPLETE
             else:
-                print(f"  No valid grasp found, skipping execution")
+                print(f"  No valid grasp candidates found, skipping execution")
                 self._state = PlannerState.COMPLETE
             
             q_command = self._rrbt2_end_position
@@ -500,10 +501,10 @@ class PlannerSystem(LeafSystem):
             print(f"  IK failed for bin_light_center, using q_home as fallback: {e}")
             raise RuntimeError("Cannot compute q_bin_light_hint from bin_light_center. Check that the bin light region is reachable.")
 
-        # Visualize bin light hint triad
-        AddMeshcatTriad(self._meshcat, "ik_targets/bin_light", length=0.15, radius=0.005)
-        self._meshcat.SetTransform("ik_targets/bin_light", X_WG_bin_light)
-        print(f"  Added triad at bin_light_center: {bin_light_center}")
+        # # Visualize bin light hint triad
+        # AddMeshcatTriad(self._meshcat, "ik_targets/bin_light", length=0.15, radius=0.005)
+        # self._meshcat.SetTransform("ik_targets/bin_light", X_WG_bin_light)
+        # print(f"  Added triad at bin_light_center: {bin_light_center}")
 
         # Compute q_mustard_position_light_hint from mustard_position_light_center
         mustard_position_light_center = self._config.simulation.mustard_position_light_center
@@ -694,9 +695,9 @@ class PlannerSystem(LeafSystem):
             sampled_position
         )
         
-        # Visualize the sampled pose
-        AddMeshcatTriad(self._meshcat, "grasp_planning/sampled_pose", length=0.1, radius=0.003)
-        self._meshcat.SetTransform("grasp_planning/sampled_pose", X_WM_sampled)
+        # # Visualize the sampled pose
+        # AddMeshcatTriad(self._meshcat, "grasp_planning/sampled_pose", length=0.1, radius=0.003)
+        # self._meshcat.SetTransform("grasp_planning/sampled_pose", X_WM_sampled)
         
         # 4. Load mustard model and transform to world frame
         print(f"  Loading mustard model...")
@@ -732,44 +733,26 @@ class PlannerSystem(LeafSystem):
             rgba=Rgba(0, 1, 1, 1)  # Cyan
         )
         
-        # 6. Select best grasp
+        # 6. Get grasp candidates (will be validated by IK in _compute_grasp_trajectory)
         print(f"  Running grasp selection...")
-        best_X_G, best_cost = select_best_grasp(
+        self._grasp_candidates = select_best_grasp(
             meshcat=self._meshcat,
             cloud=grasp_cloud,
             rng=self._rng,
             num_candidates=1000,
             num_to_draw=0,
+            num_to_return=20,  # Return top 20 for IK validation
             debug=False,
         )
         
-        if best_X_G is not None:
-            self._best_grasp_pose = best_X_G
-            print(f"\n  Best grasp found!")
-            print(f"    Cost: {best_cost:.3f}")
-            print(f"    Position: {best_X_G.translation()}")
-            rpy_grasp = RollPitchYaw(best_X_G.rotation())
-            print(f"    RPY: [{rpy_grasp.roll_angle():.3f}, {rpy_grasp.pitch_angle():.3f}, {rpy_grasp.yaw_angle():.3f}]")
-            
-            # Visualize best grasp
-            draw_grasp_candidate(self._meshcat, best_X_G, prefix="grasp_planning/best_grasp")
-            
-            # 7. Compute pre-grasp pose
-            self._pregrasp_pose = compute_pregrasp_pose(best_X_G, offset_z=0.3)
-            
-            pre_grasp_pos = self._pregrasp_pose.translation()
-            print(f"\n  Pre-grasp pose computed!")
-            print(f"    Position: {pre_grasp_pos}")
-            rpy_pregrasp = RollPitchYaw(self._pregrasp_pose.rotation())
-            print(f"    RPY: [{rpy_pregrasp.roll_angle():.3f}, {rpy_pregrasp.pitch_angle():.3f}, {rpy_pregrasp.yaw_angle():.3f}]")
-            
-            # Visualize pre-grasp pose
-            AddMeshcatTriad(self._meshcat, "grasp_planning/pregrasp_pose", length=0.15, radius=0.005)
-            self._meshcat.SetTransform("grasp_planning/pregrasp_pose", self._pregrasp_pose)
-            draw_grasp_candidate(self._meshcat, self._pregrasp_pose, prefix="grasp_planning/pregrasp_gripper")
-            
+        if self._grasp_candidates:
+            print(f"\n  Found {len(self._grasp_candidates)} grasp candidates for IK validation")
+            # Best grasp will be selected during IK validation in _compute_grasp_trajectory
+            self._best_grasp_pose = None  # Will be set after IK validation
+            self._pregrasp_pose = None
         else:
-            print(f"\n  No valid grasp found!")
+            print(f"\n  No valid grasp candidates found!")
+            self._grasp_candidates = []
             self._best_grasp_pose = None
             self._pregrasp_pose = None
 
@@ -777,13 +760,17 @@ class PlannerSystem(LeafSystem):
         """
         Compute the grasp execution trajectory.
         
+        Iterates through grasp candidates and validates each with IK.
+        Uses the first candidate that passes all IK checks.
+        
         Creates a trajectory through waypoints:
         1. current position (end of RRBT2)
         2. home position (safe intermediate waypoint if needed)
         3. pregrasp pose (30cm above grasp)
         4. grasp pose (at object)
         5. grasp hold (same pose, gripper closes)
-        6. lift pose (grasp + 20cm in Z)
+        6. lift pose (grasp + 30cm in Z)
+        7. drop pose (above square bin)
         
         Timing is adjusted based on joint space distances.
         
@@ -797,92 +784,264 @@ class PlannerSystem(LeafSystem):
         q_current = self._rrbt2_end_position
         print(f"  Current position: {np.round(q_current, 3)}")
         
-        # Use current position as initial guess (closer to target), but q_home as cost center
-        # to prefer natural arm configurations
-        print(f"  Computing IK for pregrasp pose...")
-        try:
-            q_pregrasp = np.array(solve_ik_for_pose(
-                plant=self._plant,
-                X_WG_target=self._pregrasp_pose,
-                q_nominal=tuple(self._q_home),  # Cost center for natural configuration
-                theta_bound=0.05,  # ~3 degrees orientation tolerance
-                pos_tol=0.01,     # 5mm position tolerance
-                q_initial=tuple(q_current),  # Start search from current position
-            ))
-            print(f"    q_pregrasp: {np.round(q_pregrasp, 3)}")
-        except RuntimeError as e:
-            print(f"    IK failed for pregrasp: {e}")
+        if not self._grasp_candidates:
+            print(f"  No grasp candidates to validate!")
             return False
         
-        # Compute IK for grasp pose (use pregrasp as seed for nearby solution)
-        print(f"  Computing IK for grasp pose...")
-        try:
-            q_grasp = np.array(solve_ik_for_pose(
-                plant=self._plant,
-                X_WG_target=self._best_grasp_pose,
-                q_nominal=tuple(q_pregrasp),
-                theta_bound=0.02,  # ~1 degree orientation tolerance for precise grasp
-                pos_tol=0.003,     # 3mm position tolerance for precise grasp
-            ))
-            print(f"    q_grasp: {np.round(q_grasp, 3)}")
-        except RuntimeError as e:
-            print(f"    IK failed for grasp: {e}")
+        # Iterate through grasp candidates and find first one that passes all IK checks
+        print(f"\n  Validating {len(self._grasp_candidates)} grasp candidates with IK...")
+        
+        q_pregrasp = None
+        q_grasp = None
+        q_lift = None
+        q_drop = None
+        lift_pos = None
+        drop_pos = None
+        
+        for candidate_idx, (cost, grasp_pose) in enumerate(self._grasp_candidates):
+            print(f"\n  Candidate {candidate_idx + 1}/{len(self._grasp_candidates)} (cost={cost:.3f}):")
+            
+            # Compute pregrasp pose for this candidate
+            pregrasp_pose = compute_pregrasp_pose(grasp_pose, offset_z=0.3)
+            
+            # Try IK for pregrasp
+            try:
+                q_pregrasp = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=pregrasp_pose,
+                    q_nominal=tuple(self._q_home),
+                    theta_bound=0.05,
+                    pos_tol=0.01,
+                    q_initial=tuple(q_current),
+                ))
+                print(f"    Pregrasp IK: OK")
+            except RuntimeError:
+                print(f"    Pregrasp IK: FAILED")
+                continue
+            
+            # Try IK for grasp
+            try:
+                q_grasp = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=grasp_pose,
+                    q_nominal=tuple(q_pregrasp),
+                    theta_bound=0.01,
+                    pos_tol=0.00005,
+                ))
+                print(f"    Grasp IK: OK")
+            except RuntimeError:
+                print(f"    Grasp IK: FAILED")
+                continue
+            
+            # Compute lift pose (maintain grasp orientation)
+            lift_pos = grasp_pose.translation() + np.array([0, 0, 0.3])
+            X_lift = RigidTransform(grasp_pose.rotation(), lift_pos)
+            
+            # Try IK for lift
+            try:
+                q_lift = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=X_lift,
+                    q_nominal=tuple(q_grasp),
+                    theta_bound=0.05,
+                    pos_tol=0.005,
+                ))
+                print(f"    Lift IK: OK")
+            except RuntimeError:
+                print(f"    Lift IK: FAILED")
+                continue
+            
+            # Compute drop pose (flat/flush - gripper x-z plane parallel to ground)
+            drop_pos = np.array([0.5, -0.5, lift_pos[2]])
+            
+            # Make gripper flat: y-axis points down, x-z plane is horizontal
+            # Get grasp x-axis and project to horizontal plane
+            grasp_x_world = grasp_pose.rotation().matrix()[:, 0]  # Gripper x-axis in world frame
+            grasp_x_horizontal = np.array([grasp_x_world[0], grasp_x_world[1], 0.0])
+            grasp_x_horizontal_norm = np.linalg.norm(grasp_x_horizontal)
+            if grasp_x_horizontal_norm > 1e-6:
+                gripper_x = grasp_x_horizontal / grasp_x_horizontal_norm
+            else:
+                # Fallback: use world x-axis if grasp x is vertical
+                gripper_x = np.array([1.0, 0.0, 0.0])
+            
+            # Gripper y-axis points down (world -z)
+            gripper_y = np.array([0.0, 0.0, -1.0])
+            
+            # Gripper z-axis is cross product (ensures right-handed frame)
+            gripper_z = np.cross(gripper_x, gripper_y)
+            gripper_z = gripper_z / np.linalg.norm(gripper_z)
+            
+            # Recompute x to ensure orthonormality
+            gripper_x = np.cross(gripper_y, gripper_z)
+            gripper_x = gripper_x / np.linalg.norm(gripper_x)
+            
+            # Construct rotation matrix with flat orientation
+            R_drop_flat = RotationMatrix(np.column_stack([gripper_x, gripper_y, gripper_z]))
+            X_drop = RigidTransform(R_drop_flat, drop_pos)
+            
+            # Try IK for drop
+            try:
+                q_drop = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=X_drop,
+                    q_nominal=tuple(q_lift),
+                    theta_bound=0.05,
+                    pos_tol=0.01,
+                    q_initial=tuple(q_lift),
+                ))
+                print(f"    Drop IK: OK")
+            except RuntimeError:
+                print(f"    Drop IK: FAILED")
+                continue
+            
+            # All IK checks passed! Use this grasp
+            print(f"\n  SUCCESS! Using grasp candidate {candidate_idx + 1} (cost={cost:.3f})")
+            
+            # Store the validated grasp and pregrasp poses
+            self._best_grasp_pose = grasp_pose
+            self._pregrasp_pose = pregrasp_pose
+            self._drop_pose = X_drop
+            
+            # Visualize the selected grasp
+            rpy_grasp = RollPitchYaw(grasp_pose.rotation())
+            print(f"    Position: {grasp_pose.translation()}")
+            print(f"    RPY: [{rpy_grasp.roll_angle():.3f}, {rpy_grasp.pitch_angle():.3f}, {rpy_grasp.yaw_angle():.3f}]")
+            
+            draw_grasp_candidate(self._meshcat, grasp_pose, prefix="grasp_planning/best_grasp")
+            AddMeshcatTriad(self._meshcat, "grasp_planning/grasp_pose", length=0.15, radius=0.005)
+            self._meshcat.SetTransform("grasp_planning/grasp_pose", grasp_pose)
+            
+            AddMeshcatTriad(self._meshcat, "grasp_planning/pregrasp_pose", length=0.15, radius=0.005)
+            self._meshcat.SetTransform("grasp_planning/pregrasp_pose", pregrasp_pose)
+            draw_grasp_candidate(self._meshcat, pregrasp_pose, prefix="grasp_planning/pregrasp_gripper")
+            
+            break
+        else:
+            # No candidate passed all IK checks
+            print(f"\n  All {len(self._grasp_candidates)} grasp candidates failed IK validation!")
             return False
         
-        # Compute lift pose (grasp + 0.3m in Z) with STRAIGHT-DOWN orientation
-        lift_pos = self._best_grasp_pose.translation() + np.array([0, 0, 0.3])
-        # Use the same orientation as q_home (known to be reachable)
-        # RPY: [-103.8°, 0°, 90°] = [-1.8124, 0, π/2] radians
-        R_straight_down = RollPitchYaw(-1.8124, 0, np.pi/2).ToRotationMatrix()
-        X_lift = RigidTransform(R_straight_down, lift_pos)
+        # Add intermediate waypoints for straight-up lift motion
+        # This ensures the arm moves straight up in Cartesian space, not a curved path
+        print(f"\n  Computing intermediate waypoints for straight-up lift...")
+        grasp_pos = self._best_grasp_pose.translation()
+        lift_intermediate_waypoints = []
+        lift_intermediate_qs = []
         
-        print(f"  Computing IK for lift pose (straight down)...")
-        try:
-            q_lift = np.array(solve_ik_for_pose(
-                plant=self._plant,
-                X_WG_target=X_lift,
-                q_nominal=tuple(q_grasp),
-                theta_bound=0.05,  # ~3 degrees orientation tolerance
-                pos_tol=0.005,     # 5mm position tolerance
-            ))
-            print(f"    q_lift: {np.round(q_lift, 3)}")
-        except RuntimeError as e:
-            print(f"    IK failed for lift: {e}")
-            return False
+        # Create waypoints at 0.1m, 0.2m, and 0.3m above grasp (same X, Y, orientation)
+        for z_offset in [0.1, 0.2, 0.3]:
+            intermediate_pos = np.array([grasp_pos[0], grasp_pos[1], grasp_pos[2] + z_offset])
+            X_intermediate = RigidTransform(self._best_grasp_pose.rotation(), intermediate_pos)
+            
+            try:
+                # Use previous waypoint as seed (or grasp if first)
+                q_seed = lift_intermediate_qs[-1] if lift_intermediate_qs else q_grasp
+                q_intermediate = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=X_intermediate,
+                    q_nominal=tuple(q_seed),
+                    theta_bound=0.05,
+                    pos_tol=0.01,
+                    q_initial=tuple(q_seed),
+                ))
+                lift_intermediate_waypoints.append(X_intermediate)
+                lift_intermediate_qs.append(q_intermediate)
+                print(f"    Intermediate waypoint at +{z_offset:.1f}m: OK")
+            except RuntimeError as e:
+                print(f"    Intermediate waypoint at +{z_offset:.1f}m: FAILED ({e})")
+                # If intermediate fails, fall back to direct grasp->lift
+                lift_intermediate_waypoints = []
+                lift_intermediate_qs = []
+                break
         
-        # Compute drop pose (above square bin at same Z as lift) with STRAIGHT-DOWN orientation
-        # Square bin center: [0.5, -0.5]
-        drop_pos = np.array([0.5, -0.5, lift_pos[2]])  # Same Z as lift
-        X_drop = RigidTransform(R_straight_down, drop_pos)  # Same straight-down orientation
-        self._drop_pose = X_drop
+        # If we successfully computed intermediate waypoints, use them
+        # Otherwise, fall back to direct grasp->lift
+        use_intermediate_lift = len(lift_intermediate_qs) > 0
+        if use_intermediate_lift:
+            print(f"  Using {len(lift_intermediate_qs)} intermediate waypoints for straight-up lift")
+        else:
+            print(f"  Falling back to direct grasp->lift (no intermediate waypoints)")
         
-        # Add Meshcat triad for drop pose visualization
-        AddMeshcatTriad(self._meshcat, "grasp_planning/drop_pose", length=0.15, radius=0.005)
-        self._meshcat.SetTransform("grasp_planning/drop_pose", X_drop)
+        # Add intermediate waypoints for horizontal transfer (lift → drop)
+        # This ensures the arm moves smoothly horizontally, not in a curved/waving path
+        print(f"\n  Computing intermediate waypoints for horizontal transfer...")
+        transfer_intermediate_qs = []
         
-        print(f"  Computing IK for drop pose...")
-        print(f"    Drop position: {np.round(drop_pos, 4)}")
-        try:
-            q_drop = np.array(solve_ik_for_pose(
-                plant=self._plant,
-                X_WG_target=X_drop,
-                q_nominal=tuple(q_lift),  # Use lift as seed (closer configuration)
-                theta_bound=0.05,  # ~3 degrees orientation tolerance
-                pos_tol=0.01,      # 10mm position tolerance (slightly more relaxed)
-                q_initial=tuple(q_lift),  # Start search from lift position
-            ))
-            print(f"    q_drop: {np.round(q_drop, 3)}")
-        except RuntimeError as e:
-            print(f"    IK failed for drop: {e}")
-            return False
+        # Compute intermediate positions (interpolate XY, keep Z constant)
+        lift_xy = lift_pos[:2]  # [x, y] at lift
+        drop_xy = drop_pos[:2]  # [x, y] at drop
+        transfer_z = lift_pos[2]  # Constant Z height
+        
+        # Get orientations for interpolation
+        R_lift = self._best_grasp_pose.rotation()  # Grasp orientation at lift
+        R_drop = self._drop_pose.rotation()  # Flat orientation at drop
+        
+        # Use 3 intermediate waypoints at 25%, 50%, 75% of the way
+        for i, alpha in enumerate([0.25, 0.5, 0.75]):
+            # Interpolate position linearly
+            intermediate_xy = lift_xy + alpha * (drop_xy - lift_xy)
+            intermediate_pos = np.array([intermediate_xy[0], intermediate_xy[1], transfer_z])
+            
+            # Keep grasp orientation for first two waypoints (25%, 50%), switch to flat at 75%
+            # This ensures smooth motion and only rotates near the end
+            if alpha < 0.75:
+                R_intermediate = R_lift
+            else:
+                R_intermediate = R_drop
+            
+            X_intermediate = RigidTransform(R_intermediate, intermediate_pos)
+            
+            try:
+                # Use previous waypoint as seed (or q_lift if first)
+                q_seed = transfer_intermediate_qs[-1] if transfer_intermediate_qs else q_lift
+                q_intermediate = np.array(solve_ik_for_pose(
+                    plant=self._plant,
+                    X_WG_target=X_intermediate,
+                    q_nominal=tuple(q_seed),
+                    theta_bound=0.05,
+                    pos_tol=0.01,
+                    q_initial=tuple(q_seed),
+                ))
+                transfer_intermediate_qs.append(q_intermediate)
+                print(f"    Transfer waypoint at {int(alpha*100)}%: OK")
+            except RuntimeError as e:
+                print(f"    Transfer waypoint at {int(alpha*100)}%: FAILED ({e})")
+                # Fall back to direct lift→drop
+                transfer_intermediate_qs = []
+                break
+        
+        # Check if transfer waypoints were successful
+        use_intermediate_transfer = len(transfer_intermediate_qs) > 0
+        if use_intermediate_transfer:
+            print(f"  Using {len(transfer_intermediate_qs)} intermediate waypoints for horizontal transfer")
+        else:
+            print(f"  Falling back to direct lift->drop (no intermediate waypoints)")
         
         # Calculate joint space distances
         dist_current_to_home = np.linalg.norm(self._q_home - q_current)
         dist_home_to_pregrasp = np.linalg.norm(q_pregrasp - self._q_home)
         dist_current_to_pregrasp = np.linalg.norm(q_pregrasp - q_current)
         dist_pregrasp_to_grasp = np.linalg.norm(q_grasp - q_pregrasp)
-        dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
-        dist_lift_to_drop = np.linalg.norm(q_drop - q_lift)
+        
+        # Compute distances for lift segments
+        if use_intermediate_lift:
+            dist_grasp_to_lift_0_1 = np.linalg.norm(lift_intermediate_qs[0] - q_grasp)
+            dist_lift_0_1_to_0_2 = np.linalg.norm(lift_intermediate_qs[1] - lift_intermediate_qs[0])
+            dist_lift_0_2_to_lift = np.linalg.norm(q_lift - lift_intermediate_qs[1])
+            dist_grasp_to_lift = dist_grasp_to_lift_0_1 + dist_lift_0_1_to_0_2 + dist_lift_0_2_to_lift
+        else:
+            dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
+        
+        # Compute distances for transfer segments (lift → drop)
+        if use_intermediate_transfer:
+            dist_lift_to_transfer_25 = np.linalg.norm(transfer_intermediate_qs[0] - q_lift)
+            dist_transfer_25_to_50 = np.linalg.norm(transfer_intermediate_qs[1] - transfer_intermediate_qs[0])
+            dist_transfer_50_to_75 = np.linalg.norm(transfer_intermediate_qs[2] - transfer_intermediate_qs[1])
+            dist_transfer_75_to_drop = np.linalg.norm(q_drop - transfer_intermediate_qs[2])
+            dist_lift_to_drop = dist_lift_to_transfer_25 + dist_transfer_25_to_50 + dist_transfer_50_to_75 + dist_transfer_75_to_drop
+        else:
+            dist_lift_to_drop = np.linalg.norm(q_drop - q_lift)
         
         print(f"\n  Joint space distances:")
         print(f"    current → pregrasp (direct): {dist_current_to_pregrasp:.4f} rad")
@@ -906,45 +1065,98 @@ class PlannerSystem(LeafSystem):
             t_pregrasp = t_home + dist_home_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
             t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
-            t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
-            t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            
+            # Build trajectory with optional intermediate lift and transfer waypoints
+            if use_intermediate_lift:
+                t_lift_0_1 = t_grasp_end + dist_grasp_to_lift_0_1 * time_per_rad
+                t_lift_0_2 = t_lift_0_1 + dist_lift_0_1_to_0_2 * time_per_rad
+                t_lift = t_lift_0_2 + dist_lift_0_2_to_lift * time_per_rad
+            else:
+                t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
+            
+            if use_intermediate_transfer:
+                t_transfer_25 = t_lift + dist_lift_to_transfer_25 * time_per_rad
+                t_transfer_50 = t_transfer_25 + dist_transfer_25_to_50 * time_per_rad
+                t_transfer_75 = t_transfer_50 + dist_transfer_50_to_75 * time_per_rad
+                t_drop = t_transfer_75 + dist_transfer_75_to_drop * time_per_rad
+            else:
+                t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            
             t_release = t_drop + 0.5  # 0.5 second hold at drop before release
             t_end = t_release + 0.5   # 0.5 second after release
             
-            times = np.array([0.0, t_home, t_pregrasp, t_grasp_start, t_grasp_end, t_lift, t_drop, t_release, t_end])
-            waypoints = np.column_stack([
-                q_current,
-                self._q_home,
-                q_pregrasp,
-                q_grasp,
-                q_grasp,  # Hold at grasp pose
-                q_lift,
-                q_drop,
-                q_drop,   # Hold at drop pose
-                q_drop,   # Stay at drop after release
-            ])
+            # Build times and waypoints arrays based on which intermediate waypoints are used
+            times_list = [0.0, t_home, t_pregrasp, t_grasp_start, t_grasp_end]
+            waypoints_list = [q_current, self._q_home, q_pregrasp, q_grasp, q_grasp]
+            
+            if use_intermediate_lift:
+                times_list.extend([t_lift_0_1, t_lift_0_2, t_lift])
+                waypoints_list.extend([lift_intermediate_qs[0], lift_intermediate_qs[1], q_lift])
+            else:
+                times_list.append(t_lift)
+                waypoints_list.append(q_lift)
+            
+            if use_intermediate_transfer:
+                times_list.extend([t_transfer_25, t_transfer_50, t_transfer_75, t_drop])
+                waypoints_list.extend([transfer_intermediate_qs[0], transfer_intermediate_qs[1], transfer_intermediate_qs[2], q_drop])
+            else:
+                times_list.append(t_drop)
+                waypoints_list.append(q_drop)
+            
+            times_list.extend([t_release, t_end])
+            waypoints_list.extend([q_drop, q_drop])  # Hold at drop, stay after release
+            
+            times = np.array(times_list)
+            waypoints = np.column_stack(waypoints_list)
         else:
             print(f"\n  Using DIRECT path to pregrasp")
             
             t_pregrasp = dist_current_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
             t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
-            t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
-            t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            
+            # Build trajectory with optional intermediate lift and transfer waypoints
+            if use_intermediate_lift:
+                t_lift_0_1 = t_grasp_end + dist_grasp_to_lift_0_1 * time_per_rad
+                t_lift_0_2 = t_lift_0_1 + dist_lift_0_1_to_0_2 * time_per_rad
+                t_lift = t_lift_0_2 + dist_lift_0_2_to_lift * time_per_rad
+            else:
+                t_lift = t_grasp_end + dist_grasp_to_lift * time_per_rad
+            
+            if use_intermediate_transfer:
+                t_transfer_25 = t_lift + dist_lift_to_transfer_25 * time_per_rad
+                t_transfer_50 = t_transfer_25 + dist_transfer_25_to_50 * time_per_rad
+                t_transfer_75 = t_transfer_50 + dist_transfer_50_to_75 * time_per_rad
+                t_drop = t_transfer_75 + dist_transfer_75_to_drop * time_per_rad
+            else:
+                t_drop = t_lift + dist_lift_to_drop * time_per_rad
+            
             t_release = t_drop + 0.5  # 0.5 second hold at drop before release
             t_end = t_release + 0.5   # 0.5 second after release
             
-            times = np.array([0.0, t_pregrasp, t_grasp_start, t_grasp_end, t_lift, t_drop, t_release, t_end])
-            waypoints = np.column_stack([
-                q_current,
-                q_pregrasp,
-                q_grasp,
-                q_grasp,  # Hold at grasp pose
-                q_lift,
-                q_drop,
-                q_drop,   # Hold at drop pose
-                q_drop,   # Stay at drop after release
-            ])
+            # Build times and waypoints arrays based on which intermediate waypoints are used
+            times_list = [0.0, t_pregrasp, t_grasp_start, t_grasp_end]
+            waypoints_list = [q_current, q_pregrasp, q_grasp, q_grasp]
+            
+            if use_intermediate_lift:
+                times_list.extend([t_lift_0_1, t_lift_0_2, t_lift])
+                waypoints_list.extend([lift_intermediate_qs[0], lift_intermediate_qs[1], q_lift])
+            else:
+                times_list.append(t_lift)
+                waypoints_list.append(q_lift)
+            
+            if use_intermediate_transfer:
+                times_list.extend([t_transfer_25, t_transfer_50, t_transfer_75, t_drop])
+                waypoints_list.extend([transfer_intermediate_qs[0], transfer_intermediate_qs[1], transfer_intermediate_qs[2], q_drop])
+            else:
+                times_list.append(t_drop)
+                waypoints_list.append(q_drop)
+            
+            times_list.extend([t_release, t_end])
+            waypoints_list.extend([q_drop, q_drop])  # Hold at drop, stay after release
+            
+            times = np.array(times_list)
+            waypoints = np.column_stack(waypoints_list)
         
         # Create trajectory using first-order hold (linear interpolation)
         self._grasp_trajectory = PiecewisePolynomial.FirstOrderHold(times, waypoints)
@@ -962,10 +1174,20 @@ class PlannerSystem(LeafSystem):
         print(f"    Total duration: {t_end:.1f}s")
         print(f"    Gripper closes at: {t_grasp_start:.1f}s")
         print(f"    Gripper opens at: {t_release:.1f}s")
+        
+        # Build waypoint description string
+        waypoint_str = "current"
         if use_home_waypoint:
-            print(f"    Waypoints: current → HOME → pregrasp → grasp → hold → lift → drop → hold → release")
+            waypoint_str += " → HOME"
+        waypoint_str += " → pregrasp → grasp → hold"
+        if use_intermediate_lift:
+            waypoint_str += " → lift(+0.1m) → lift(+0.2m) → lift(+0.3m)"
         else:
-            print(f"    Waypoints: current → pregrasp → grasp → hold → lift → drop → hold → release")
+            waypoint_str += " → lift"
+        if use_intermediate_transfer:
+            waypoint_str += " → transfer(25%) → transfer(50%) → transfer(75%)"
+        waypoint_str += " → drop → hold → release"
+        print(f"    Waypoints: {waypoint_str}")
         
         # Verify cartesian positions
         print(f"\n  Expected cartesian positions:")

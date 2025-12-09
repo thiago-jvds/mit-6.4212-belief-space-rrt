@@ -42,9 +42,13 @@ from pydrake.all import (
 )
 import argparse
 from src.perception.mustard_pose_estimator import MustardPoseEstimatorSystem, segment_by_yellow, ToPointCloud
+from src.perception.light_and_dark import BinLightDarkRegionSensorSystem, MustardPositionLightDarkRegionSensorSystem
 from manipulation.icp import IterativeClosestPoint
 from pydrake.all import Concatenate
 from src.visualization.covariance_ellipsoid import CovarianceEllipsoidSystem
+from src.visualization.belief_bar_chart import BeliefBarChartSystem
+from src.estimation.belief_estimator import BinBeliefEstimatorSystem
+from src.estimation.mustard_position_estimator import MustardPositionBeliefEstimatorSystem
 from src.grasping.grasp_selection import (
     select_best_grasp,
     compute_pregrasp_pose,
@@ -54,12 +58,14 @@ from src.grasping.grasp_selection import (
 from src.utils.config_loader import load_config
 from src.utils.ik_solver import solve_ik_for_pose
 from src.utils.camera_pose_manager import restore_camera_pose
+from src.planning.standard_rrt import rrt_planning
+from src.simulation.simulation_tools import IiwaProblem
 
 
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 25  # Same as main.py for fair comparison
+RANDOM_SEED = 36  # Same as main.py for fair comparison
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)
@@ -73,6 +79,7 @@ class BaselinePlannerState(Enum):
     PREDICT_BIN = auto()       # Immediately predict bin from 50/50 prior
     POSE_ESTIMATION = auto()   # Run pose estimation (ICP) on predicted bin
     GRASP_PLANNING = auto()    # Plan grasp with LARGE uncertainty (no reduction)
+    RRT_PLANNING = auto()      # RRT motion planning from home to pregrasp
     GRASP_EXECUTING = auto()   # Execute grasp trajectory
     COMPLETE = auto()          # Done, report results
 
@@ -130,6 +137,9 @@ class BaselinePlannerSystem(LeafSystem):
             "sampled_position": None,
             "position_error": None,
             "grasp_planning_success": None,
+            "rrt_success": None,  # RRT motion planning result
+            "rrt_iterations": None,  # Number of RRT iterations
+            "rrt_path_length": None,  # Number of waypoints in RRT path
             "grasp_execution_success": None,
             "overall_success": None,
             "failure_reason": None,
@@ -152,6 +162,10 @@ class BaselinePlannerSystem(LeafSystem):
         self._pregrasp_pose = None
         self._grasp_candidates = []
         self._sampled_position = None
+        
+        # RRT planning
+        self._q_pregrasp = None  # IK-solved pregrasp configuration (RRT goal)
+        self._rrt_path = None    # RRT path from home to pregrasp
         
         # Grasp execution
         self._grasp_trajectory = None
@@ -187,35 +201,25 @@ class BaselinePlannerSystem(LeafSystem):
             self.CalcGripperCommand
         )
         
-        # Output port: large covariance for ellipsoid visualization
+        # Output port for pose estimation trigger (1.0 only in POSE_ESTIMATION state)
+        # Use time_ticket() to ensure re-evaluation at each time step
+        # This breaks the algebraic loop (no INPUT port dependencies) while ensuring
+        # the trigger updates as internal Python state changes
         self.DeclareVectorOutputPort(
-            "position_covariance",
-            4,
-            self._CalcCovariance
+            "pose_estimation_trigger",
+            BasicVector(1),
+            self.CalcPoseEstimationTrigger,
+            {self.time_ticket()}
         )
         
-        # Output port: position mean for ellipsoid visualization
-        self.DeclareVectorOutputPort(
-            "position_mean",
-            3,
-            self._CalcPositionMean
-        )
+        # NOTE: position_mean and position_covariance output ports removed
+        # These now come from MustardPositionBeliefEstimatorSystem
+        # The planner still uses _large_covariance internally for grasp planning
         
         print(f"BaselinePlannerSystem initialized:")
         print(f"  q_home: {self._q_home}")
         print(f"  Initial uncertainty: {self._initial_uncertainty}")
         print(f"  LARGE covariance (NOT reduced): {np.diag(self._large_covariance)}")
-    
-    def _CalcCovariance(self, context, output):
-        """Output the LARGE (unreduced) covariance."""
-        output.SetFromVector(self._large_covariance.flatten())
-    
-    def _CalcPositionMean(self, context, output):
-        """Output the estimated position (or zeros if not yet estimated)."""
-        if self._estimated_mustard_position is not None:
-            output.SetFromVector(self._estimated_mustard_position)
-        else:
-            output.SetFromVector(np.zeros(3))
     
     def configure_for_execution(self, true_bin, X_WM_mustard=None):
         """Configure the planner with ground truth for evaluation."""
@@ -275,6 +279,14 @@ class BaselinePlannerSystem(LeafSystem):
             q_command = self._q_home
             
         elif self._state == BaselinePlannerState.POSE_ESTIMATION:
+            # Skip first entry to allow trigger cache to update
+            # Drake may have cached trigger=0.0 from previous state
+            if not hasattr(self, '_pose_estimation_ready'):
+                self._pose_estimation_ready = True
+                q_command = self._q_home
+                output.SetFromVector(q_command)
+                return
+            
             # Read estimated pose from input port
             print(f"\n{'='*60}")
             print("BASELINE: POSE ESTIMATION (ICP)")
@@ -308,12 +320,15 @@ class BaselinePlannerSystem(LeafSystem):
                     self._state = BaselinePlannerState.GRASP_PLANNING
                     
             except Exception as e:
-                # Perception failed - this happens when wrong bin is predicted
-                # and cameras can't find the mustard bottle (no yellow points)
-                print(f"  ICP FAILED with exception: {type(e).__name__}")
-                print(f"  (Predicted bin {self._predicted_bin} was wrong - mustard in bin {self._true_bin})")
+                # Perception failed - could be wrong bin OR other ICP issues
+                print(f"  ICP FAILED with exception: {type(e).__name__}: {e}")
+                if self._predicted_bin != self._true_bin:
+                    print(f"  (Predicted bin {self._predicted_bin} was wrong - mustard in bin {self._true_bin})")
+                    self._results["failure_reason"] = f"ICP failed - wrong bin prediction (error: {type(e).__name__})"
+                else:
+                    print(f"  (Predicted bin {self._predicted_bin} was CORRECT - ICP failed for other reason)")
+                    self._results["failure_reason"] = f"ICP failed despite correct bin prediction (error: {type(e).__name__}: {e})"
                 self._results["icp_success"] = False
-                self._results["failure_reason"] = f"ICP failed - wrong bin prediction (error: {type(e).__name__})"
                 self._results["overall_success"] = False
                 self._state = BaselinePlannerState.COMPLETE
             
@@ -332,9 +347,9 @@ class BaselinePlannerSystem(LeafSystem):
                     self._state = BaselinePlannerState.GRASP_EXECUTING
                     print(f"  Starting grasp execution at t={t:.2f}s")
                 else:
-                    print(f"  All grasp candidates failed IK")
+                    print(f"  All grasp candidates failed IK or RRT")
                     self._results["grasp_planning_success"] = False
-                    self._results["failure_reason"] = "Grasp IK validation failed"
+                    self._results["failure_reason"] = "Grasp IK/RRT planning failed for all candidates"
                     self._results["overall_success"] = False
                     self._state = BaselinePlannerState.COMPLETE
             else:
@@ -378,7 +393,12 @@ class BaselinePlannerSystem(LeafSystem):
     
     def CalcGripperCommand(self, context, output):
         output.SetFromVector([self._gripper_command])
-    
+
+    def CalcPoseEstimationTrigger(self, context, output):
+        """Output 1.0 only when in POSE_ESTIMATION state, 0.0 otherwise."""
+        trigger_value = 1.0 if self._state == BaselinePlannerState.POSE_ESTIMATION else 0.0
+        output.SetFromVector([trigger_value])
+
     def _report_bin_prediction(self):
         """
         BASELINE: Report the bin prediction made from 50/50 prior.
@@ -485,7 +505,68 @@ class BaselinePlannerSystem(LeafSystem):
         else:
             print(f"\n  No valid grasp candidates found!")
             self._results["grasp_planning_success"] = False
-    
+
+    def _run_rrt_to_pregrasp(self):
+        """
+        Use standard RRT to plan collision-free path from home to pregrasp.
+        
+        This is the ACTUAL RRT motion planning step:
+        - Creates a collision-free path from home configuration to pregrasp configuration
+        - Uses the standard RRT (Rapidly-exploring Random Tree) algorithm
+        - Explores configuration space by randomly sampling and growing a tree
+        
+        Returns:
+            True if RRT planning succeeded, False otherwise.
+        """
+        print(f"\n  ============================================================")
+        print(f"  RRT MOTION PLANNING (Home -> Pregrasp)")
+        print(f"  ============================================================")
+        print(f"    Start configuration (home): {np.round(self._q_home, 3)}")
+        print(f"    Goal configuration (pregrasp): {np.round(self._q_pregrasp, 3)}")
+        print(f"    Algorithm: Standard RRT (Rapidly-exploring Random Tree)")
+        print(f"    Max iterations: 2000")
+        print(f"    Goal sampling probability: 0.1 (10%)")
+        print()
+        
+        # Create IiwaProblem for RRT
+        # This sets up the collision checking and configuration space bounds
+        problem = IiwaProblem(
+            q_start=tuple(self._q_home),
+            q_goal=tuple(self._q_pregrasp),
+            gripper_setpoint=0.1,  # Open gripper
+            meshcat=self._meshcat,
+            is_visualizing=False,
+        )
+        
+        # Run RRT planning - this is the actual RRT algorithm
+        print(f"    Starting RRT tree growth...")
+        rrt_path, iterations = rrt_planning(
+            problem,
+            max_iterations=2000,
+            prob_sample_q_goal=0.1,
+            rng=self._rng,
+            verbose=False,  # Set to True for detailed per-iteration logging
+        )
+        
+        if rrt_path is None:
+            print(f"    [RRT RESULT] FAILED - Could not find collision-free path")
+            print(f"    Iterations attempted: {iterations}")
+            self._results["rrt_success"] = False
+            self._results["rrt_iterations"] = iterations
+            return False
+        
+        # Record RRT success metrics
+        self._results["rrt_success"] = True
+        self._results["rrt_iterations"] = iterations
+        self._results["rrt_path_length"] = len(rrt_path)
+        
+        print(f"  ============================================================")
+        print(f"  RRT PLANNING COMPLETE")
+        print(f"  ============================================================")
+        
+        self._rrt_path = rrt_path
+        return True
+
     def _compute_grasp_trajectory(self):
         """Compute grasp execution trajectory (same logic as PlannerSystem)."""
         print(f"\nComputing grasp execution trajectory...")
@@ -584,6 +665,16 @@ class BaselinePlannerSystem(LeafSystem):
                 print(f"    Drop IK: FAILED")
                 continue
             
+            # All IK checks passed - now run RRT from home to pregrasp
+            # This is the actual RRT motion planning step!
+            self._q_pregrasp = q_pregrasp  # Store for RRT goal
+            print(f"\n    All IK checks passed! Now running RRT motion planning...")
+            if not self._run_rrt_to_pregrasp():
+                print(f"    RRT motion planning FAILED - trying next grasp candidate")
+                continue
+            
+            print(f"    RRT motion planning: SUCCESS ({len(self._rrt_path)} collision-free waypoints)")
+            
             # Success! Use this grasp
             print(f"\n  SUCCESS! Using grasp candidate {candidate_idx + 1}")
             
@@ -600,34 +691,49 @@ class BaselinePlannerSystem(LeafSystem):
             print(f"\n  All candidates failed IK validation!")
             return False
         
-        # Build trajectory (simplified - direct path)
+        # Build combined trajectory: RRT path (home->pregrasp) + IK segment (pregrasp->grasp->lift->drop)
         time_per_rad = 1.0
+        rrt_time_per_segment = 0.05  # Time per RRT waypoint
         
-        dist_to_pregrasp = np.linalg.norm(q_pregrasp - q_current)
+        # Convert RRT path to trajectory
+        rrt_trajectory = path_to_trajectory(self._rrt_path, time_per_segment=rrt_time_per_segment)
+        rrt_duration = rrt_trajectory.end_time()
+        
+        print(f"\n  Building combined trajectory:")
+        print(f"    RRT segment: {len(self._rrt_path)} waypoints, {rrt_duration:.2f}s")
+        
+        # Calculate times for IK segment (after RRT completes)
         dist_pregrasp_to_grasp = np.linalg.norm(q_grasp - q_pregrasp)
         dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
         dist_lift_to_drop = np.linalg.norm(q_drop - q_lift)
         
-        t_pregrasp = dist_to_pregrasp * time_per_rad
+        t_pregrasp = rrt_duration  # RRT ends at pregrasp
         t_grasp = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-        t_hold = t_grasp + 1.0
+        t_hold = t_grasp + 1.0  # Hold for gripper close
         t_lift = t_hold + dist_grasp_to_lift * time_per_rad
         t_drop = t_lift + dist_lift_to_drop * time_per_rad
         t_release = t_drop + 0.5
         t_end = t_release + 0.5
         
-        times = np.array([0.0, t_pregrasp, t_grasp, t_hold, t_lift, t_drop, t_release, t_end])
-        waypoints = np.column_stack([
-            q_current, q_pregrasp, q_grasp, q_grasp, q_lift, q_drop, q_drop, q_drop
+        # Build times array: RRT waypoint times + IK segment times
+        rrt_times = np.linspace(0, rrt_duration, len(self._rrt_path))
+        ik_times = np.array([t_grasp, t_hold, t_lift, t_drop, t_release, t_end])
+        times = np.concatenate([rrt_times, ik_times])
+        
+        # Build waypoints array: RRT waypoints + IK waypoints
+        rrt_waypoints = np.array([np.array(q) for q in self._rrt_path]).T  # (7, n_rrt)
+        ik_waypoints = np.column_stack([
+            q_grasp, q_grasp, q_lift, q_drop, q_drop, q_drop
         ])
+        waypoints = np.hstack([rrt_waypoints, ik_waypoints])
         
         self._grasp_trajectory = PiecewisePolynomial.FirstOrderHold(times, waypoints)
         self._grasp_close_time = t_grasp
         self._grasp_open_time = t_release
         self._grasp_end_position = q_drop
         
-        print(f"\n  Grasp trajectory created:")
-        print(f"    Duration: {t_end:.1f}s")
+        print(f"    IK segment: pregrasp->grasp->lift->drop")
+        print(f"    Total duration: {t_end:.1f}s")
         print(f"    Gripper closes at: {t_grasp:.1f}s")
         print(f"    Gripper opens at: {t_release:.1f}s")
         
@@ -684,8 +790,8 @@ def print_results(results):
     print(f"    ICP success: {results['icp_success']}")
     if results['icp_position'] is not None:
         print(f"    ICP position: [{results['icp_position'][0]:.4f}, {results['icp_position'][1]:.4f}, {results['icp_position'][2]:.4f}]")
-    elif not results['icp_success']:
-        print(f"    ICP failed because wrong bin was predicted!")
+    elif not results['icp_success'] and results.get('failure_reason'):
+        print(f"    Failure: {results['failure_reason']}")
     
     # Position sampling
     print(f"\n[3] POSITION SAMPLING (from LARGE unreduced covariance)")
@@ -698,12 +804,24 @@ def print_results(results):
         if results['position_error'] > 0.05:
             print(f"    [HIGH ERROR - Large covariance caused bad sample!]")
     
-    # Grasp planning
-    print(f"\n[4] GRASP PLANNING")
+    # Grasp planning (includes RRT motion planning)
+    print(f"\n[4] GRASP PLANNING + RRT MOTION PLANNING")
+    print(f"    Method: Standard RRT (Rapidly-exploring Random Tree)")
+    print(f"    Purpose: Find collision-free path from home to pregrasp pose")
     if results['grasp_planning_success'] is not None:
-        print(f"    Success: {results['grasp_planning_success']}")
+        print(f"    Grasp candidates found: {results['grasp_planning_success']}")
     else:
-        print(f"    Not reached (earlier failure)")
+        print(f"    Grasp planning: Not reached (earlier failure)")
+    
+    # RRT-specific results
+    if results['rrt_success'] is not None:
+        print(f"    RRT motion planning: {'SUCCESS' if results['rrt_success'] else 'FAILED'}")
+        if results['rrt_iterations'] is not None:
+            print(f"    RRT iterations: {results['rrt_iterations']}")
+        if results['rrt_path_length'] is not None:
+            print(f"    RRT path waypoints: {results['rrt_path_length']}")
+    else:
+        print(f"    RRT motion planning: Not reached (earlier failure)")
     
     # Grasp execution
     print(f"\n[5] GRASP EXECUTION")
@@ -783,6 +901,28 @@ def main():
     station.set_name("HardwareStation")
     plant = station.GetSubsystemByName("plant")
 
+    # ============================================================
+    # GET BIN TRANSFORMS FOR BELIEF BAR CHART POSITIONING
+    # ============================================================
+    temp_plant_context = plant.CreateDefaultContext()
+    
+    # Get bin0 transform
+    bin0_instance = plant.GetModelInstanceByName("bin0")
+    bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
+    X_W_bin0 = plant.EvalBodyPoseInWorld(temp_plant_context, bin0_body)
+    
+    # Get bin1 transform
+    bin1_instance = plant.GetModelInstanceByName("bin1")
+    bin1_body = plant.GetBodyByName("bin_base", bin1_instance)
+    X_W_bin1 = plant.EvalBodyPoseInWorld(temp_plant_context, bin1_body)
+    
+    # Define relative transform from bin frame to chart position
+    X_bin0_chart = RigidTransform([-0.22, 0.29, 0.21])
+    X_bin1_chart = RigidTransform([-0.22, -0.29, 0.21])
+    
+    print(f"  Bin0 position: {X_W_bin0.translation()}")
+    print(f"  Bin1 position: {X_W_bin1.translation()}")
+
     # Add baseline planner
     planner = builder.AddSystem(BaselinePlannerSystem(plant, config, meshcat, scenario_path, rng=np_rng))
     planner.set_name("BaselinePlanner")
@@ -796,6 +936,45 @@ def main():
         station.GetInputPort("wsg.position")
     )
 
+    # ============================================================
+    # ADD LIGHT/DARK PERCEPTION SYSTEMS
+    # ============================================================
+    # Add Bin Light/Dark Perception System
+    print("  Adding BinLightDarkRegionSensorSystem...")
+    bin_perception_sys = builder.AddSystem(
+        BinLightDarkRegionSensorSystem(
+            plant=plant,
+            light_region_center=config.simulation.bin_light_center,
+            light_region_size=config.simulation.bin_light_size,
+            tpr_light=float(config.physics.tpr_light),
+            fpr_light=float(config.physics.fpr_light),
+            rng=np_rng,
+        )
+    )
+    bin_perception_sys.set_name("BinLightDarkPerception")
+    builder.Connect(
+        station.GetOutputPort("iiwa.position_measured"),
+        bin_perception_sys.GetInputPort("iiwa.position"),
+    )
+
+    # Add Mustard Position Light/Dark Perception System
+    print("  Adding MustardPositionLightDarkRegionSensorSystem...")
+    mustard_position_perception_sys = builder.AddSystem(
+        MustardPositionLightDarkRegionSensorSystem(
+            plant=plant,
+            light_region_center=config.simulation.mustard_position_light_center,
+            light_region_size=config.simulation.mustard_position_light_size,
+            meas_noise_light=float(config.physics.meas_noise_light),
+            meas_noise_dark=float(config.physics.meas_noise_dark),
+            rng=np_rng,
+        )
+    )
+    mustard_position_perception_sys.set_name("MustardPositionPerception")
+    builder.Connect(
+        station.GetOutputPort("iiwa.position_measured"),
+        mustard_position_perception_sys.GetInputPort("iiwa.position"),
+    )
+
     # Add point clouds
     print("  Adding point cloud generation...")
     to_point_cloud = AddPointClouds(
@@ -804,6 +983,14 @@ def main():
         builder=builder,
         meshcat=None,
     )
+    print(f"    Added point cloud converters for: {list(to_point_cloud.keys())}")
+
+    # Export point cloud ports for visualization/debugging
+    point_cloud_output_ports = {}
+    for camera_name, converter in to_point_cloud.items():
+        port_name = f"{camera_name}_point_cloud"
+        builder.ExportOutput(converter.get_output_port(), port_name)
+        point_cloud_output_ports[camera_name] = port_name
 
     # Add MustardPoseEstimatorSystem
     print("  Adding MustardPoseEstimatorSystem...")
@@ -821,32 +1008,50 @@ def main():
                 pose_estimator.GetInputPort(f"camera{i}_point_cloud")
             )
 
-    # Create a constant belief that always picks the predicted bin
-    # We'll create a "fake" belief vector based on planner's prediction
-    # For now, use a constant that will be set after prediction
-    # The pose estimator needs belief to select cameras
-    # We'll use a workaround: create constant source and connect after
+    # ============================================================
+    # ADD BELIEF ESTIMATORS
+    # ============================================================
+    # Add Bin Belief Estimator (Bayes Filter)
+    # Note: true_bin will be set after we randomly choose it
+    print("  Adding BinBeliefEstimatorSystem...")
+    belief_estimator = builder.AddSystem(
+        BinBeliefEstimatorSystem(
+            n_bins=2,
+            true_bin=0,  # Placeholder, will be updated after setup
+            max_bin_uncertainty=float(config.planner.max_bin_uncertainty),
+            rng=np_rng,
+        )
+    )
+    belief_estimator.set_name("BinBeliefEstimator")
     
-    # For baseline, create belief source based on planner's prediction
-    # The pose estimator uses argmax(belief) to select cameras
-    # Create a belief that strongly favors the predicted bin
+    # Connect estimator to perception's sensor_model output
+    builder.Connect(
+        bin_perception_sys.GetOutputPort("sensor_model"),
+        belief_estimator.GetInputPort("sensor_model")
+    )
+
+    # For pose estimator: Use planner's prediction (NOT the real belief)
+    # This ensures correct cameras are selected for the predicted bin
+    # The real belief_estimator is still used for visualization (bar charts)
     predicted_bin = planner._predicted_bin
     if predicted_bin == 0:
-        belief_for_pose_est = np.array([0.99, 0.01])  # Strongly favor bin 0
+        belief_for_pose_est = np.array([0.99, 0.01])
     else:
-        belief_for_pose_est = np.array([0.01, 0.99])  # Strongly favor bin 1
+        belief_for_pose_est = np.array([0.01, 0.99])
     
-    print(f"  Belief for pose estimator (predicted bin {predicted_bin}): {belief_for_pose_est}")
-    
-    belief_source = builder.AddSystem(ConstantVectorSource(belief_for_pose_est))
-    trigger_source = builder.AddSystem(ConstantVectorSource(np.array([1.0])))  # Always trigger
-    
+    print(f"  Pose estimator using predicted bin {predicted_bin}: belief={belief_for_pose_est}")
+
+    belief_source_for_pose = builder.AddSystem(ConstantVectorSource(belief_for_pose_est))
+    belief_source_for_pose.set_name("BeliefSourceForPoseEstimator")
+
     builder.Connect(
-        belief_source.get_output_port(),
+        belief_source_for_pose.get_output_port(),
         pose_estimator.GetInputPort("belief")
     )
+    # Connect planner's trigger output (1.0 only in POSE_ESTIMATION state)
+    # This prevents pose estimation from running during initialization/settling
     builder.Connect(
-        trigger_source.get_output_port(),
+        planner.GetOutputPort("pose_estimation_trigger"),
         pose_estimator.GetInputPort("estimation_trigger")
     )
 
@@ -856,7 +1061,56 @@ def main():
         planner.GetInputPort("estimated_mustard_pose")
     )
 
-    # Add covariance ellipsoid visualization
+    # ============================================================
+    # ADD MUSTARD POSITION BELIEF ESTIMATOR (Kalman Filter)
+    # ============================================================
+    print("  Adding MustardPositionBeliefEstimatorSystem...")
+    mustard_belief_estimator = builder.AddSystem(
+        MustardPositionBeliefEstimatorSystem(
+            initial_uncertainty=float(config.planner.mustard_position_initial_uncertainty),
+        )
+    )
+    mustard_belief_estimator.set_name("MustardPositionBeliefEstimator")
+
+    # Connect measurement variance from perception
+    builder.Connect(
+        mustard_position_perception_sys.GetOutputPort("measurement_variance"),
+        mustard_belief_estimator.GetInputPort("measurement_variance")
+    )
+
+    # Connect estimated pose from ICP (for initial position)
+    builder.Connect(
+        pose_estimator.GetOutputPort("estimated_pose"),
+        mustard_belief_estimator.GetInputPort("estimated_pose")
+    )
+
+    # ============================================================
+    # ADD BELIEF BAR CHART VISUALIZATION
+    # ============================================================
+    print("  Adding BeliefBarChartSystem...")
+    belief_viz = builder.AddSystem(
+        BeliefBarChartSystem(
+            meshcat=meshcat,
+            n_bins=2,
+            X_W_bin0=X_W_bin0,
+            X_W_bin1=X_W_bin1,
+            X_bin0_chart=X_bin0_chart,
+            X_bin1_chart=X_bin1_chart,
+            max_height=0.15,
+            bar_width=0.05,
+        )
+    )
+    belief_viz.set_name("BeliefBarChart")
+    
+    # Connect visualizer to estimator output
+    builder.Connect(
+        belief_estimator.GetOutputPort("belief"),
+        belief_viz.GetInputPort("belief")
+    )
+
+    # ============================================================
+    # ADD COVARIANCE ELLIPSOID VISUALIZATION
+    # ============================================================
     print("  Adding CovarianceEllipsoidSystem...")
     covariance_viz = builder.AddSystem(
         CovarianceEllipsoidSystem(
@@ -867,12 +1121,13 @@ def main():
     )
     covariance_viz.set_name("CovarianceEllipsoid")
 
+    # Connect position and covariance from mustard position belief estimator
     builder.Connect(
-        planner.GetOutputPort("position_mean"),
+        mustard_belief_estimator.GetOutputPort("position_mean"),
         covariance_viz.GetInputPort("position")
     )
     builder.Connect(
-        planner.GetOutputPort("position_covariance"),
+        mustard_belief_estimator.GetOutputPort("covariance"),
         covariance_viz.GetInputPort("covariance")
     )
 
@@ -884,6 +1139,29 @@ def main():
     print("\nInitializing simulator...")
     simulator = Simulator(diagram)
     simulator.set_target_realtime_rate(1.0)
+
+    # Visualize light regions
+    if args.visualize == "True":
+        # Visualize bin light region indicator (green)
+        meshcat.SetObject(
+            "bin_light_region_indicator",
+            Box(*config.simulation.bin_light_size),
+            Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
+        )
+        meshcat.SetTransform(
+            "bin_light_region_indicator",
+            RigidTransform(RotationMatrix(), config.simulation.bin_light_center),
+        )
+        # Visualize mustard position light region indicator (orange)
+        meshcat.SetObject(
+            "mustard_position_light_region_indicator",
+            Box(*config.simulation.mustard_position_light_size),
+            Rgba(1.0, 0.5, 0.0, 0.3),  # Orange, 0.3 Alpha
+        )
+        meshcat.SetTransform(
+            "mustard_position_light_region_indicator",
+            RigidTransform(RotationMatrix(), config.simulation.mustard_position_light_center),
+        )
 
     # Step briefly to initialize
     simulator.AdvanceTo(0.1)
@@ -907,13 +1185,31 @@ def main():
 
     diagram.ForcedPublish(sim_context)
 
+    # Update belief estimator with correct true_bin
+    belief_estimator._true_bin = true_bin
+
     # Let the mustard bottle fall and settle via gravity
     # (The bottle is placed at z=0.2 above the bin floor)
     print("  Waiting for mustard bottle to settle...")
     simulator.AdvanceTo(0.8)  # Wait until t=0.8s for settling
     print("  Bottle settled.")
 
-    # Configure planner (after bottle has settled)
+    # Force camera update by evaluating point clouds after settling
+    # This ensures RGBD data reflects the settled mustard bottle
+    print("  Updating camera point clouds...")
+    sim_context = simulator.get_context()
+    for camera_name, port_name in point_cloud_output_ports.items():
+        pcl = diagram.GetOutputPort(port_name).Eval(sim_context)
+        print(f"    {camera_name}: {pcl.size()} points")
+        # Visualize immediately for debugging
+        meshcat.SetObject(
+            f"{camera_name}.cloud",
+            pcl,
+            point_size=0.003,
+        )
+    print("  Camera point clouds updated and visualized.")
+
+    # Configure planner (after bottle has settled and cameras updated)
     planner.configure_for_execution(true_bin, X_WM_mustard)
 
     # Start recording

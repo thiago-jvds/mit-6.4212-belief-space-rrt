@@ -36,6 +36,7 @@ class BinLightDarkRegionSensorSystem(LeafSystem):
         light_region_size: np.ndarray,
         tpr_light: float = 0.80,
         fpr_light: float = 0.15,
+        rng: np.random.Generator = None,
     ):
         """
         Args:
@@ -44,6 +45,7 @@ class BinLightDarkRegionSensorSystem(LeafSystem):
             light_region_size: Size of the light region [dx, dy, dz]
             tpr_light: True Positive Rate in light region (default 0.80)
             fpr_light: False Positive Rate in light region (default 0.15)
+            rng: NumPy random generator for reproducibility (optional)
         """
         LeafSystem.__init__(self)
 
@@ -68,7 +70,7 @@ class BinLightDarkRegionSensorSystem(LeafSystem):
         # 3. Store Region Params
         self._center = light_region_center
         self._half_size = light_region_size / 2.0
-        self._rng = np.random.default_rng()
+        self._rng = rng if rng is not None else np.random.default_rng()
         
         # TPR/FPR sensor model (replaces sigma_light/sigma_dark)
         self._tpr_light = tpr_light
@@ -141,7 +143,17 @@ class MustardPositionLightDarkRegionSensorSystem(LeafSystem):
         light_region_size: np.ndarray,
         meas_noise_light: float,
         meas_noise_dark: float,
+        rng: np.random.Generator = None,
     ):
+        """
+        Args:
+            plant: Drake MultibodyPlant for kinematics
+            light_region_center: Center of the light region [x, y, z]
+            light_region_size: Size of the light region [dx, dy, dz]
+            meas_noise_light: Measurement noise (sigma) in light region
+            meas_noise_dark: Measurement noise (sigma) in dark region
+            rng: NumPy random generator for reproducibility (optional)
+        """
         LeafSystem.__init__(self)
 
         # 1. Internal Plant & Context 
@@ -160,7 +172,7 @@ class MustardPositionLightDarkRegionSensorSystem(LeafSystem):
         # 3. Store Region Params
         self._center = light_region_center
         self._half_size = light_region_size / 2.0
-        self._rng = np.random.default_rng()
+        self._rng = rng if rng is not None else np.random.default_rng()
         self._sigma_light = meas_noise_light
         self._sigma_dark = meas_noise_dark
 

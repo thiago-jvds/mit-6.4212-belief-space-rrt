@@ -53,6 +53,7 @@ class BinBeliefEstimatorSystem(LeafSystem):
         true_bin: int = 0,
         max_bin_uncertainty: float = 0.01,
         update_period: float = 0.01,
+        rng: np.random.Generator = None,
     ):
         """
         Args:
@@ -60,12 +61,14 @@ class BinBeliefEstimatorSystem(LeafSystem):
             true_bin: Ground truth bin index for simulation (default: 0)
             max_bin_uncertainty: Threshold for misclassification risk to be "confident"
             update_period: Bayes filter update period in seconds
+            rng: NumPy random generator for reproducibility (optional)
         """
         LeafSystem.__init__(self)
         
         self._n_bins = n_bins
         self._true_bin = true_bin
         self._max_bin_uncertainty = max_bin_uncertainty
+        self._rng = rng if rng is not None else np.random.default_rng()
         
         # Input port: sensor model [TPR, FPR] from LightDarkRegionSystem
         self._sensor_port = self.DeclareVectorInputPort("sensor_model", 2)
@@ -142,7 +145,8 @@ class BinBeliefEstimatorSystem(LeafSystem):
                 current_belief, 
                 self._true_bin, 
                 tpr, 
-                fpr
+                fpr,
+                rng=self._rng,
             )
             belief_vec.set_value(updated_belief)
         # If in dark, belief unchanged (uninformative measurements)

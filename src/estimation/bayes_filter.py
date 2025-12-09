@@ -90,6 +90,7 @@ def bayes_update_all_bins(
     true_bin: int,
     tpr: float,
     fpr: float,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
     Measure ALL bins and update belief sequentially.
@@ -103,10 +104,15 @@ def bayes_update_all_bins(
         true_bin: Index of bin where object actually is (ground truth)
         tpr: True Positive Rate
         fpr: False Positive Rate
+        rng: NumPy random generator for reproducibility (optional)
         
     Returns:
         Updated belief after measuring all bins
     """
+    # Use provided rng or create default
+    if rng is None:
+        rng = np.random.default_rng()
+    
     n_bins = len(belief)
     updated_belief = belief.copy()
     
@@ -116,10 +122,10 @@ def bayes_update_all_bins(
         
         if is_object_here:
             # Object is in this bin: detection with probability TPR
-            observation = np.random.rand() < tpr
+            observation = rng.random() < tpr
         else:
             # Object not in this bin: false alarm with probability FPR
-            observation = np.random.rand() < fpr
+            observation = rng.random() < fpr
         
         # Update belief with this measurement
         updated_belief = bayes_update_single(

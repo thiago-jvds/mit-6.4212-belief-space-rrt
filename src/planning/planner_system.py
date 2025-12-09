@@ -99,7 +99,7 @@ class PlannerSystem(LeafSystem):
         - iiwa_position_command: 7D joint position command
     """
     
-    def __init__(self, plant, config, meshcat, scenario_path):
+    def __init__(self, plant, config, meshcat, scenario_path, rng=None):
         """
         Initialize the PlannerSystem.
         
@@ -108,6 +108,7 @@ class PlannerSystem(LeafSystem):
             config: RRBT configuration namespace (from load_rrbt_config)
             meshcat: Meshcat visualizer instance
             scenario_path: Path to scenario.yaml file
+            rng: NumPy random generator for reproducibility (optional)
         """
         LeafSystem.__init__(self)
         
@@ -116,6 +117,7 @@ class PlannerSystem(LeafSystem):
         self._config = config
         self._meshcat = meshcat
         self._scenario_path = scenario_path
+        self._rng = rng if rng is not None else np.random.default_rng()
         
         # Positions (computed in constructor via IK)
         self._q_home = np.array(config.simulation.q_home)
@@ -164,7 +166,7 @@ class PlannerSystem(LeafSystem):
         self._best_grasp_pose = None
         self._pregrasp_pose = None
         self._grasp_candidates = []  # List of (cost, X_G) tuples for IK validation
-        self._rng = np.random.default_rng()  # Random generator for grasp sampling
+        # Note: self._rng is set in constructor from passed parameter
         
         # Grasp execution variables
         self._grasp_trajectory = None
@@ -568,6 +570,7 @@ class PlannerSystem(LeafSystem):
             visualize_callback=None,
             visualize_interval=1000,
             verbose=False,
+            rng=self._rng,
         )
         
         if rrbt_result:
@@ -634,6 +637,7 @@ class PlannerSystem(LeafSystem):
             visualize_callback=None,
             visualize_interval=1000,
             verbose=False,
+            rng=self._rng,
         )
         
         if rrbt2_result:

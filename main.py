@@ -15,6 +15,7 @@ Usage:
 Then open http://localhost:7000 in your browser.
 """
 
+import random
 import numpy as np
 from pathlib import Path
 from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
@@ -43,8 +44,15 @@ from src.utils.config_loader import load_config
 from src.utils.camera_pose_manager import restore_camera_pose
 
 
-# Initialize numpy random generator for uniform random numbers
-np_rng = np.random.default_rng(seed=19)  # Fixed seed for reproducibility
+# ============================================================
+# RANDOM SEED CONFIGURATION - Set this for deterministic runs
+# ============================================================
+RANDOM_SEED = 23
+
+# Seed all random number generators for reproducibility
+np.random.seed(RANDOM_SEED)  # Global numpy random state (for external libraries)
+random.seed(RANDOM_SEED)     # Global Python random (for manipulation library)
+np_rng = np.random.default_rng(seed=RANDOM_SEED)  # NumPy Generator for internal use
 
 
 def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng: np.random.Generator):        
@@ -198,7 +206,7 @@ def main():
     print(f"  Chart offset from bin1: {X_bin1_chart.translation()}")
 
     # Add PlannerSystem (replaces ConstantVectorSource)
-    planner = builder.AddSystem(PlannerSystem(plant, config, meshcat, scenario_path))
+    planner = builder.AddSystem(PlannerSystem(plant, config, meshcat, scenario_path, rng=np_rng))
     planner.set_name("PlannerSystem")
     
     # Connect planner to robot arm
@@ -221,6 +229,7 @@ def main():
             light_region_size=config.simulation.bin_light_size,
             tpr_light=float(config.physics.tpr_light),
             fpr_light=float(config.physics.fpr_light),
+            rng=np_rng,
         )
     )
     bin_perception_sys.set_name("LightDarkPerception")
@@ -238,6 +247,7 @@ def main():
             light_region_size=config.simulation.mustard_position_light_size,
             meas_noise_light=float(config.physics.meas_noise_light),
             meas_noise_dark=float(config.physics.meas_noise_dark),
+            rng=np_rng,
         )
     )
     mustard_position_perception_sys.set_name("MustardPositionPerception")
@@ -255,6 +265,7 @@ def main():
             n_bins=2,
             true_bin=0,  # Placeholder, will be updated
             max_bin_uncertainty=float(config.planner.max_bin_uncertainty),
+            rng=np_rng,
         )
     )
     belief_estimator.set_name("BinBeliefEstimator")
@@ -453,7 +464,7 @@ def main():
     plant_context = plant.GetMyMutableContextFromRoot(sim_context)
 
     # Randomly choose a true bin
-    true_bin = np.random.randint(0, 2)
+    true_bin = np_rng.integers(0, 2)
     print(f"Randomly chosen true bin: {true_bin}")
 
     # Place mustard bottle randomly in the true bin

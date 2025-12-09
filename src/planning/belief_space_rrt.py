@@ -19,7 +19,6 @@ defines:
 import numpy as np
 from src.planning.rrt_tools import RRBT_tools
 from src.planning.rrbt_tree import RRBTProblem
-import random
 
 from typing import Callable, Optional
 
@@ -35,6 +34,7 @@ def rrbt_planning(
     visualize_callback: Optional[Callable] = None,
     visualize_interval: int = 1,
     verbose: bool = True,
+    rng: np.random.Generator = None,
 ) -> tuple[tuple[list[tuple], np.ndarray] | None, int]:
     """
     RRBT Planning with anytime RRT*-style behavior.
@@ -52,10 +52,15 @@ def rrbt_planning(
         visualize_callback: Optional callback for visualization
         visualize_interval: Iterations between visualization updates
         verbose: Print detailed progress information
+        rng: NumPy random generator for reproducibility (optional)
         
     Returns:
         ((path_to_info, predicted_goal_config), iterations) or (None, iterations)
     """
+    # Use provided rng or create default
+    if rng is None:
+        rng = np.random.default_rng()
+    
     # Initialize tools (generic - works with any belief type)
     tools = RRBT_tools(problem)
 
@@ -68,14 +73,14 @@ def rrbt_planning(
         print(f"   > RRBT Iter {k + 1}/{max_iterations} ", end="\r")
         
         # Sample configuration with biases
-        eps = random.random()
+        eps = rng.random()
 
         if eps < bias_prob_sample_q_goal:
             # Sample the prior mean (best guess of goal)
             q_rand = problem.goal
         elif eps < (bias_prob_sample_q_goal + bias_prob_sample_q_bin_light):
             # Sample the light region (to gain information)
-            q_rand = tuple(q_light_hint + np.random.uniform(-0.1, 0.1, size=7))
+            q_rand = tuple(q_light_hint + rng.uniform(-0.1, 0.1, size=7))
         else:
             q_rand = tools.sample_node()
 

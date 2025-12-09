@@ -1,16 +1,20 @@
-from random import random
+import numpy as np
 from src.planning.rrt_tools import RRT_tools
 from src.simulation.simulation_tools import IiwaProblem
 
 
 def rrt_planning(
-    problem: IiwaProblem, max_iterations: int = 1000, prob_sample_q_goal: float = 0.05
+    problem: IiwaProblem,
+    max_iterations: int = 1000,
+    prob_sample_q_goal: float = 0.05,
+    rng: np.random.Generator = None,
 ) -> tuple[list[tuple] | None, int]:
     """
     Input:
         problem (IiwaProblem): instance of a utility class
         max_iterations: the maximum number of samples to be collected
         prob_sample_q_goal: the probability of sampling q_goal
+        rng: NumPy random generator for reproducibility (optional)
 
     Output:
     (path, iterations) (tuple):
@@ -19,6 +23,10 @@ def rrt_planning(
                           If no solution is found, return (None, max_iterations).
 
     """
+    # Use provided rng or create default
+    if rng is None:
+        rng = np.random.default_rng()
+    
     rrt_tools = RRT_tools(problem)
     q_goal = problem.goal
 
@@ -26,7 +34,7 @@ def rrt_planning(
         print(f"  > RRT Iteration {k+1}/{max_iterations}", end="\r")
         q_sample = rrt_tools.sample_node_in_configuration_space()
 
-        eps = random()
+        eps = rng.random()
         if eps < prob_sample_q_goal:
             q_sample = q_goal
 

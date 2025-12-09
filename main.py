@@ -167,6 +167,31 @@ def main():
     station.set_name("HardwareStation")
     plant = station.GetSubsystemByName("plant")
 
+    # ============================================================
+    # GET BIN TRANSFORMS FOR BELIEF BAR CHART POSITIONING
+    # ============================================================
+    # Create a temporary context to get bin poses (determined by model file)
+    temp_plant_context = plant.CreateDefaultContext()
+    
+    # Get bin0 transform
+    bin0_instance = plant.GetModelInstanceByName("bin0")
+    bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
+    X_W_bin0 = plant.EvalBodyPoseInWorld(temp_plant_context, bin0_body)
+    
+    # Get bin1 transform
+    bin1_instance = plant.GetModelInstanceByName("bin1")
+    bin1_body = plant.GetBodyByName("bin_base", bin1_instance)
+    X_W_bin1 = plant.EvalBodyPoseInWorld(temp_plant_context, bin1_body)
+    
+    # Define relative transform from bin frame to chart position
+    # "Top right edge" of bin: positive X (forward), negative Y (right), raised Z
+    # Bin dimensions are roughly 0.6m x 0.4m, so offset to corner and above
+    X_bin_chart = RigidTransform([-0.2, -0.28, 0.55])
+    
+    print(f"  Bin0 position: {X_W_bin0.translation()}")
+    print(f"  Bin1 position: {X_W_bin1.translation()}")
+    print(f"  Chart offset from bin: {X_bin_chart.translation()}")
+
     # Add PlannerSystem (replaces ConstantVectorSource)
     planner = builder.AddSystem(PlannerSystem(plant, config, meshcat, scenario_path))
     planner.set_name("PlannerSystem")
@@ -220,11 +245,14 @@ def main():
         belief_estimator.GetInputPort("sensor_model")
     )
 
-    # Add Belief Bar Chart Visualizer
+    # Add Belief Bar Chart Visualizer (positioned near each bin)
     belief_viz = builder.AddSystem(
         BeliefBarChartSystem(
             meshcat=meshcat,
             n_bins=2,
+            X_W_bin0=X_W_bin0,
+            X_W_bin1=X_W_bin1,
+            X_bin_chart=X_bin_chart,
         )
     )
     belief_viz.set_name("BeliefBarChart")

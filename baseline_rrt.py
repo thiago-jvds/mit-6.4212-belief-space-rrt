@@ -59,7 +59,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 20
+RANDOM_SEED = 25  # Same as main.py for fair comparison
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)
@@ -739,6 +739,8 @@ def main():
     )
     args = parser.parse_args()
 
+    import sys
+    
     print("=" * 60)
     print("BASELINE RRT - Vanilla RRT Without Belief-Space Planning")
     print("=" * 60)
@@ -747,12 +749,14 @@ def main():
     print("  - No RRBT trajectory (no uncertainty reduction)")
     print("  - Samples from LARGE initial covariance")
     print("  - Expected to FAIL most of the time\n")
+    sys.stdout.flush()
 
     # Load configuration
     config = load_config()
     print("Loaded Configuration:")
     print(f"    > Initial uncertainty: {config.planner.mustard_position_initial_uncertainty}")
     print()
+    sys.stdout.flush()
 
     # Start Meshcat (use port 7001 to avoid conflict with main.py)
     try:
@@ -903,7 +907,13 @@ def main():
 
     diagram.ForcedPublish(sim_context)
 
-    # Configure planner
+    # Let the mustard bottle fall and settle via gravity
+    # (The bottle is placed at z=0.2 above the bin floor)
+    print("  Waiting for mustard bottle to settle...")
+    simulator.AdvanceTo(0.8)  # Wait until t=0.8s for settling
+    print("  Bottle settled.")
+
+    # Configure planner (after bottle has settled)
     planner.configure_for_execution(true_bin, X_WM_mustard)
 
     # Start recording

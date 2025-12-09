@@ -47,7 +47,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 23
+RANDOM_SEED = 29
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)  # Global numpy random state (for external libraries)

@@ -33,7 +33,7 @@ from pydrake.all import (
     TrajectorySource,
 )
 from pydrake.multibody.math import SpatialVelocity
-from src.perception.light_and_dark import LightDarkRegionSensorSystem
+from src.perception.light_and_dark import BinLightDarkRegionSensorSystem
 from src.utils.config_loader import load_rrbt_config
 from src.planning.standard_rrt import rrt_planning
 from src.simulation.simulation_tools import IiwaProblem
@@ -1702,7 +1702,7 @@ def main():
 
     # ====== Perception system ======
     perception_sys = builder.AddSystem(
-        LightDarkRegionSensorSystem(
+        BinLightDarkRegionSensorSystem(
             plant=plant,
             light_region_center=config.simulation.light_center,
             light_region_size=config.simulation.light_size,

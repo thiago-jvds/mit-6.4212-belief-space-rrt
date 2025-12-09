@@ -31,11 +31,17 @@ def load_rrbt_config(filename="config.yaml"):
 
     # Convert specific lists to numpy arrays for convenience
     if "simulation" in config:
-        config["simulation"]["light_center"] = np.array(
-            config["simulation"]["light_center"]
+        config["simulation"]["bin_light_center"] = np.array(
+            config["simulation"]["bin_light_center"]
         )
-        config["simulation"]["light_size"] = np.array(
-            config["simulation"]["light_size"]
+        config["simulation"]["bin_light_size"] = np.array(
+            config["simulation"]["bin_light_size"]
+        )
+        config["simulation"]["mustard_position_light_center"] = np.array(
+            config["simulation"]["mustard_position_light_center"]
+        )
+        config["simulation"]["mustard_position_light_size"] = np.array(
+            config["simulation"]["mustard_position_light_size"]
         )
         config["simulation"]["q_home"] = np.array(config["simulation"]["q_home"])
         

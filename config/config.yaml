@@ -1,6 +1,8 @@
 simulation:
-  light_center: [ 0.0, 1.0, 0.5 ]
-  light_size: [ 0.25, 0.25, 0.25 ]
+  bin_light_center: [ 0.0, 1.0, 0.5 ]
+  bin_light_size: [ 0.25, 0.25, 0.25 ]
+  mustard_position_light_center: [ -1.0, 0.0, 0.5 ]
+  mustard_position_light_size: [ 0.25, 0.25, 0.25 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   # Goal specified as end-effector pose in world frame
   # Much easier to reason about than 7D joint configuration
@@ -18,6 +20,11 @@ physics:
   tpr_light: 0.80   # True Positive Rate: P(detected | object present)
   fpr_light: 0.15   # False Positive Rate: P(detected | object absent)
   # Dark region: Uninformative sensor (TPR=FPR=0.5, hardcoded)
+
+  # Sensor Noise:
+  # Light: High precision (info gain). Dark: Blind.
+  meas_noise_light: 0.01
+  meas_noise_dark: 1e+9
 
   # Keep buffer to avoid hitting the bottle while exploring
   safety_buffer_radius: 0.08
@@ -46,8 +53,8 @@ planner:
 # Visualization settings
 visualization:
   # Camera pose for Meshcat viewport
-  camera_position: [ -0.66052837, -0.68944092, 1.09457347 ]
-  camera_target: [ 0.3, 0.3, 0.0 ]
+  camera_position: [ 1.0, -1.0, 1.5 ]
+  camera_target: [ 0.0, 0.0, 0.0 ]
   
   # Belief bar chart position in world frame
   chart_position: [ -0.3, 0.5, 0.8 ]

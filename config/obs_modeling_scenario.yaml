@@ -47,10 +47,10 @@ directives:
 # 6. Add the Target Object
 # We place it on the shelf (free-floating, subject to physics)
 - add_model:
-    name: target_object
+    name: mustard_bottle
     file: package://drake_models/ycb/006_mustard_bottle.sdf
     default_free_body_pose:
-      base_link_mustard:
+      base_link_mustard_bottle:
         translation: [ 0.415, 0, 0.45 ]
         rotation: !Rpy { deg: [ -90, 0, 90 ] }
 

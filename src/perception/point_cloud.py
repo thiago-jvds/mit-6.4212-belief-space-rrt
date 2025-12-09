@@ -40,9 +40,9 @@ def get_icp_estimated_pose(
 
     world_frame = plant.world_frame()
 
-    model_bottle = plant.GetModelInstanceByName("target_object")
+    model_bottle = plant.GetModelInstanceByName("mustard_bottle")
     frame_bottle = plant.GetFrameByName(
-        "target_object_body_link_mustard", model_instance=model_bottle
+        "base_link_mustard_bottle", model_instance=model_bottle
     )
     X_PC_bottle = plant.CalcRelativeTransform(plant_context, world_frame, frame_bottle)
 

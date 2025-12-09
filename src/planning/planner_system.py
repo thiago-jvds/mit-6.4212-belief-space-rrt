@@ -98,7 +98,7 @@ class PlannerSystem(LeafSystem):
         # Positions (computed in constructor via IK)
         self._q_home = np.array(config.simulation.q_home)
         self._q_goal = None      # Computed via IK from tf_goal
-        self._q_light_hint = None  # Computed via IK from light_center
+        self._q_bin_light_hint = None  # Computed via IK from bin_light_center
         
         # State machine
         self._state = PlannerState.IDLE
@@ -139,7 +139,7 @@ class PlannerSystem(LeafSystem):
         print(f"PlannerSystem initialized:")
         print(f"  q_home: {self._q_home}")
         print(f"  q_goal: {self._q_goal}")
-        print(f"  q_light_hint: {self._q_light_hint}")
+        print(f"  q_bin_light_hint: {self._q_bin_light_hint}")
     
     def configure_for_execution(self, true_bin, X_WM_mustard=None):
         """
@@ -262,9 +262,9 @@ class PlannerSystem(LeafSystem):
     
     def _compute_ik_targets(self):
         """
-        Compute q_goal and q_light_hint from task-space targets via IK.
+        Compute q_goal and q_bin_light_hint from task-space targets via IK.
         
-        Uses the tf_goal and light_center from config to solve IK for
+        Uses the tf_goal and bin_light_center from config to solve IK for
         the corresponding joint configurations.
         """
         # Compute q_goal from tf_goal
@@ -291,24 +291,24 @@ class PlannerSystem(LeafSystem):
             print(f"  IK failed for tf_goal: {e}")
             raise RuntimeError("Cannot compute q_goal from tf_goal. Check that the goal pose is reachable.")
         
-        # Compute q_light_hint from light_center
-        light_center = self._config.simulation.light_center
+        # Compute q_bin_light_hint from bin_light_center
+        bin_light_center = self._config.simulation.bin_light_center
         target_rotation = RotationMatrix.MakeXRotation(np.pi) @ RotationMatrix.MakeZRotation(np.pi)
-        X_WG_light = RigidTransform(target_rotation, light_center)
+        X_WG_bin_light = RigidTransform(target_rotation, bin_light_center)
         
-        print(f"Computing q_light_hint from light_center {light_center}...")
+        print(f"Computing q_bin_light_hint from bin_light_center {bin_light_center}...")
         try:
-            self._q_light_hint = np.array(solve_ik_for_pose(
+            self._q_bin_light_hint = np.array(solve_ik_for_pose(
                 plant=self._plant,
-                X_WG_target=X_WG_light,
+                X_WG_target=X_WG_bin_light,
                 q_nominal=tuple(self._q_home),
                 theta_bound=0.1,  # Relaxed orientation tolerance
                 pos_tol=0.05,     # 5cm position tolerance
             ))
-            print(f"  q_light_hint computed: {self._q_light_hint}")
+            print(f"  q_bin_light_hint computed: {self._q_bin_light_hint}")
         except RuntimeError as e:
-            print(f"  IK failed for light_center, using q_home as fallback: {e}")
-            raise RuntimeError("Cannot compute q_light_hint from light_center. Check that the light region is reachable.")
+            print(f"  IK failed for bin_light_center, using q_home as fallback: {e}")
+            raise RuntimeError("Cannot compute q_bin_light_hint from bin_light_center. Check that the bin light region is reachable.")
     
     def _run_rrbt_planning(self):
         """
@@ -327,8 +327,8 @@ class PlannerSystem(LeafSystem):
             q_goal=tuple(self._q_goal),
             gripper_setpoint=0.1,
             meshcat=self._meshcat,
-            light_center=self._config.simulation.light_center,
-            light_size=self._config.simulation.light_size,
+            light_center=self._config.simulation.bin_light_center,
+            light_size=self._config.simulation.bin_light_size,
             tpr_light=float(self._config.physics.tpr_light),
             fpr_light=float(self._config.physics.fpr_light),
             n_bins=2,
@@ -343,7 +343,7 @@ class PlannerSystem(LeafSystem):
             max_iterations=int(self._config.planner.max_iterations),
             bias_prob_sample_q_goal=float(self._config.planner.bias_prob_sample_q_goal),
             bias_prob_sample_q_bin_light=float(self._config.planner.bias_prob_sample_q_bin_light),
-            q_light_hint=self._q_light_hint,
+            q_light_hint=self._q_bin_light_hint,
             visualize_callback=None,
             visualize_interval=1000,
             verbose=False,

@@ -24,7 +24,7 @@ from pydrake.all import (
 import sys
 sys.path.append(os.getcwd())
 
-from src.perception.light_and_dark import LightDarkRegionSensorSystem
+from src.perception.light_and_dark import BinLightDarkRegionSensorSystem
 from src.estimation.belief_estimator import BeliefEstimatorSystem
 from src.visualization.belief_visualizer import BeliefVisualizerSystem
 from src.utils.config_loader import load_rrbt_config
@@ -88,7 +88,7 @@ def generate_diagram(output_file="system_diagram.png"):
 
     # ====== Perception System (LightDarkRegionSystem) ======
     perception_sys = builder.AddSystem(
-        LightDarkRegionSensorSystem(
+        BinLightDarkRegionSensorSystem(
             plant=plant,
             light_region_center=config.simulation.light_center,
             light_region_size=config.simulation.light_size,

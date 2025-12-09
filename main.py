@@ -32,7 +32,7 @@ from pydrake.all import (
     RollPitchYaw,
 )
 import argparse
-from src.perception.light_and_dark import LightDarkRegionSensorSystem
+from src.perception.light_and_dark import BinLightDarkRegionSensorSystem, MustardPositionLightDarkRegionSensorSystem
 from src.perception.mustard_pose_estimator import MustardPoseEstimatorSystem
 from src.planning.planner_system import PlannerSystem, PlannerState
 from src.visualization.belief_bar_chart import BeliefBarChartSystem
@@ -212,21 +212,37 @@ def main():
     )
 
     # Add Perception System (LightDarkRegionSystem)
-    perception_sys = builder.AddSystem(
-        LightDarkRegionSensorSystem(
+    bin_perception_sys = builder.AddSystem(
+        BinLightDarkRegionSensorSystem(
             plant=plant,
-            light_region_center=config.simulation.light_center,
-            light_region_size=config.simulation.light_size,
+            light_region_center=config.simulation.bin_light_center,
+            light_region_size=config.simulation.bin_light_size,
             tpr_light=float(config.physics.tpr_light),
             fpr_light=float(config.physics.fpr_light),
         )
     )
-    perception_sys.set_name("LightDarkPerception")
-    
+    bin_perception_sys.set_name("LightDarkPerception")
     # Connect perception to station output
     builder.Connect(
         station.GetOutputPort("iiwa.position_measured"),
-        perception_sys.GetInputPort("iiwa.position"),
+        bin_perception_sys.GetInputPort("iiwa.position"),
+    )
+    
+    # Add Mustard Position Perception System
+    mustard_position_perception_sys = builder.AddSystem(
+        MustardPositionLightDarkRegionSensorSystem(
+            plant=plant,
+            light_region_center=config.simulation.mustard_position_light_center,
+            light_region_size=config.simulation.mustard_position_light_size,
+            meas_noise_light=float(config.physics.meas_noise_light),
+            meas_noise_dark=float(config.physics.meas_noise_dark),
+        )
+    )
+    mustard_position_perception_sys.set_name("MustardPositionPerception")
+    # Connect mustard position perception to station output
+    builder.Connect(
+        station.GetOutputPort("iiwa.position_measured"),
+        mustard_position_perception_sys.GetInputPort("iiwa.position"),
     )
 
     # Add Belief Estimator System (Discrete Bayes Filter)
@@ -242,7 +258,7 @@ def main():
     
     # Connect estimator to perception's sensor_model output
     builder.Connect(
-        perception_sys.GetOutputPort("sensor_model"),
+        bin_perception_sys.GetOutputPort("sensor_model"),
         belief_estimator.GetInputPort("sensor_model")
     )
 
@@ -324,24 +340,26 @@ def main():
 
     # Visualize light region
     if args.visualize == "True":
+        # Visualize bin light region indicator
         meshcat.SetObject(
-            "light_region_indicator",
-            Box(*config.simulation.light_size),
+            "bin_light_region_indicator",
+            Box(*config.simulation.bin_light_size),
             Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
         )
         meshcat.SetTransform(
-            "light_region_indicator",
-            RigidTransform(RotationMatrix(), config.simulation.light_center),
+            "bin_light_region_indicator",
+            RigidTransform(RotationMatrix(), config.simulation.bin_light_center),
         )
-
-    # Visualize goal pose
-    tf_goal = config.simulation.tf_goal
-    X_WG_goal = RigidTransform(
-        RollPitchYaw(tf_goal.rpy).ToRotationMatrix(),
-        tf_goal.translation
-    )
-    AddMeshcatTriad(meshcat, "goal_pose", length=0.2, radius=0.005)
-    meshcat.SetTransform("goal_pose", X_WG_goal)
+        # Visualize mustard position light region indicator
+        meshcat.SetObject(
+            "mustard_position_light_region_indicator",
+            Box(*config.simulation.mustard_position_light_size),
+            Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
+        )
+        meshcat.SetTransform(
+            "mustard_position_light_region_indicator",
+            RigidTransform(RotationMatrix(), config.simulation.mustard_position_light_center),
+        )
 
     # Step simulation briefly to initialize
     simulator.AdvanceTo(0.1)

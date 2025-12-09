@@ -4,7 +4,7 @@ from manipulation.exercises.trajectories.rrt_planner.rrt_planning import (
 )
 from src.simulation.simulation_tools import IiwaProblem
 import numpy as np
-from src.planning.rrbt_tree import RRBT_BinBelief_Tree
+from src.planning.rrbt_tree import RRBT_BinBelief_Tree, RRBT_MustardPositionBelief_Tree 
 
 
 class RRT_tools:
@@ -63,7 +63,6 @@ class RRBT_BinBelief_tools(RRT_tools):
             problem
         )
 
-
     def sample_node(self):
         return self.problem.cspace.sample()
 
@@ -118,5 +117,83 @@ class RRBT_BinBelief_tools(RRT_tools):
         # Later this will be grounded to the specific bin's configuration
         true_goal = np.array(self.problem.goal)
         pred_q_goal = true_goal
+
+        return pred_q_goal
+
+class RRBT_MustardPositionBelief_tools(RRT_tools):
+    def __init__(
+        self, 
+        problem, 
+        max_uncertainty: float = 0.01, 
+        initial_uncertainty: float = 1.0,
+        lambda_weight: float = 1.0,
+    ) -> None:
+        self.problem = problem
+        self.MAX_UNCERTAINTY = max_uncertainty
+
+        self.rrbt_tree = RRBT_MustardPositionBelief_Tree(
+            problem, 
+            problem.start, 
+            max_uncertainty, 
+            initial_uncertainty,
+            lambda_weight=lambda_weight,
+        )
+
+    def sample_node(self):
+        return self.problem.cspace.sample()
+
+    def extend_towards(self, q_rand):
+        dists = [
+            self.problem.cspace.distance(n.value, q_rand) for n in self.rrbt_tree.nodes
+        ]
+        nearest_idx = np.argmin(dists)
+        node_near = self.rrbt_tree.nodes[nearest_idx]
+
+        qs = self.calc_intermediate_qs_wo_collision(node_near.value, q_rand)
+        if not qs:
+            return node_near
+
+        curr_parent = node_near
+        for q_next in qs:
+            neighbors = self.rrbt_tree.get_nearest_neighbors(q_next, k=10)
+            new_node = self.rrbt_tree.InsertNode(q_next, neighbors, curr_parent)
+            if new_node is None:
+                break
+            curr_parent = new_node
+
+        return curr_parent
+
+    def node_reaches_goal(self, node, tol=None):
+        """
+        Active Perception Termination Condition:
+        We stop ONLY when we are confident about the target's location.
+        We DO NOT check if the robot is geometrically at the goal (we don't know where it is!).
+        
+        IMPORTANT: We check trace(Σ), NOT the combined cost!
+        The combined cost includes path_length which is irrelevant for termination.
+        Termination is purely about achieving low uncertainty.
+        """
+        # Belief Check: Is the trace of covariance small enough?
+        uncertainty = np.trace(node.sigma)
+        if uncertainty > self.MAX_UNCERTAINTY:
+            return False
+
+        # If we are here, we have gathered enough information.
+        return True
+
+    def sample_final_goal(self, node):
+        """
+        Simulate the 'Commitment' step.
+        Now that uncertainty is low, we sample a specific goal configuration
+        from the belief distribution.
+        """
+        # Mean = The True Goal (Simulation of the estimator converging)
+        # Covariance = The Node's Belief (sigma)
+
+        true_goal = np.array(self.problem.goal)
+        belief_sigma = node.sigma
+
+        # Sample from N(TrueGoal, Sigma)
+        pred_q_goal = np.random.multivariate_normal(true_goal, belief_sigma)
 
         return pred_q_goal

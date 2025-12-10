@@ -37,7 +37,7 @@ planner:
 
   # GOAL CONDITION: We cannot finish unless we are confident.
   # Threshold for misclassification_risk = 1 - max(belief)
-  max_bin_uncertainty: 0.01
+  max_bin_uncertainty: 0.05
 
   # COST FUNCTION: cost = path_length + lambda_weight × misclassification_risk
   # - Small lambda (0.1-1): Prioritize shorter paths

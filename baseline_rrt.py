@@ -65,7 +65,7 @@ from src.simulation.simulation_tools import IiwaProblem
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 36  # Same as main.py for fair comparison
+RANDOM_SEED = 31  # Same as main.py for fair comparison
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)

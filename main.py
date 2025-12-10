@@ -16,6 +16,7 @@ Then open http://localhost:7000 in your browser.
 """
 
 import random
+import subprocess
 import numpy as np
 from pathlib import Path
 from manipulation.station import MakeHardwareStation, LoadScenario, AddPointClouds
@@ -33,6 +34,7 @@ from pydrake.all import (
     RollPitchYaw,
 )
 import argparse
+import matplotlib.pyplot as plt
 from src.perception.light_and_dark import BinLightDarkRegionSensorSystem, MustardPositionLightDarkRegionSensorSystem
 from src.perception.mustard_pose_estimator import MustardPoseEstimatorSystem
 from src.planning.planner_system import PlannerSystem, PlannerState
@@ -47,7 +49,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 29
+RANDOM_SEED = 25
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)  # Global numpy random state (for external libraries)
@@ -119,6 +121,107 @@ def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin
     return X_WM
 
 
+def probability_to_color(prob: float) -> tuple:
+    """
+    Convert probability to RGB color: red (0) - yellow (0.5) - green (1).
+    
+    Matches the color scheme used in BeliefBarChartSystem for Meshcat visualization.
+    
+    Args:
+        prob: Probability value in [0, 1]
+        
+    Returns:
+        Tuple of (r, g, b) values in [0, 1]
+    """
+    prob = np.clip(prob, 0.0, 1.0)
+    if prob <= 0.5:
+        # Red to Yellow: R=1, G increases from 0 to 1
+        r, g, b = 1.0, prob * 2.0, 0.0
+    else:
+        # Yellow to Green: R decreases from 1 to 0, G=1
+        r, g, b = 1.0 - (prob - 0.5) * 2.0, 1.0, 0.0
+    return (r, g, b)
+
+
+def plot_belief_bar_chart(belief: np.ndarray, bins: list, title: str, filename: str, 
+                          true_bin: int = None, confidence_threshold: float = None):
+    """
+    Generate and save a matplotlib bar chart for belief visualization.
+    
+    Uses dynamic coloring: red (0) - yellow (0.5) - green (1) based on probability.
+    
+    Args:
+        belief: Probability vector [P(bin0), P(bin1), ...]
+        bins: List of bin labels for x-axis
+        title: Plot title
+        filename: Output filename for the saved plot
+        true_bin: Optional index of the true bin (for reference in title)
+        confidence_threshold: Optional misclassification risk threshold for RRBT goal condition.
+                              If provided, draws a horizontal line at y = 1 - threshold.
+    """
+    plt.figure(figsize=(8, 6))
+    
+    # Dynamic colors based on probability: red (0) - yellow (0.5) - green (1)
+    colors = [probability_to_color(p) for p in belief]
+    bars = plt.bar(bins, belief, color=colors, alpha=0.8, edgecolor='black')
+    
+    plt.title(title, fontsize=14)
+    plt.ylabel('Probability', fontsize=12)
+    plt.xlabel('Bin Location', fontsize=12)
+    plt.ylim(0, 1.05)
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+    
+    # Add confidence threshold line if provided
+    if confidence_threshold is not None:
+        threshold_y = 1.0 - confidence_threshold
+        plt.axhline(y=threshold_y, color='black', linestyle='--', linewidth=2, 
+                    label=f'Confidence Threshold ({threshold_y:.2f})')
+        plt.legend(loc='upper right')
+    
+    # Add value labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    print(f"  Saved belief plot: {filename}")
+
+
+def save_block_diagram(diagram, output_stem: Path):
+    """
+    Save the Drake diagram structure to Graphviz .dot and .png files.
+    
+    Args:
+        diagram: Drake Diagram instance
+        output_stem: Path stem (without extension) for output files
+    """
+    output_stem = Path(output_stem)
+    if not output_stem.is_absolute():
+        output_stem = Path.cwd() / output_stem
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+
+    dot_path = output_stem.with_suffix(".dot")
+    png_path = output_stem.with_suffix(".png")
+
+    graphviz_str = diagram.GetGraphvizString()
+    dot_path.write_text(graphviz_str)
+    print(f"  Saved diagram .dot to: {dot_path}")
+
+    try:
+        subprocess.run(
+            ["dot", "-Tpng", str(dot_path), "-o", str(png_path)],
+            check=True,
+        )
+        print(f"  Saved diagram .png to: {png_path}")
+    except FileNotFoundError:
+        print("  Warning: 'dot' command not found. Install graphviz to render .png.")
+    except subprocess.CalledProcessError as e:
+        print(f"  Warning: graphviz 'dot' failed to render .png: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="MIT 6.4212 Robot Simulation")
     parser.add_argument(
@@ -128,6 +231,17 @@ def main():
         const="True",
         default="True",
         help="Enable/Disable Meshcat visualization (True/False)",
+    )
+    parser.add_argument(
+        "--generate-block-diagram",
+        action="store_true",
+        help="If set, export the built Drake diagram to .dot and .png then exit",
+    )
+    parser.add_argument(
+        "--diagram-output-stem",
+        type=str,
+        default="system_diagram_full",
+        help="Output path stem for diagram files (without extension)",
     )
     args = parser.parse_args()
 
@@ -419,6 +533,13 @@ def main():
     diagram = builder.Build()
     diagram.set_name("UnifiedPlanningDiagram")
 
+    # Optionally generate a block diagram and exit early
+    if args.generate_block_diagram:
+        print("\nGenerating block diagram...")
+        save_block_diagram(diagram, Path(args.diagram_output_stem))
+        print("Block diagram generated. Exiting before simulation.")
+        return
+
     # ============================================================
     # INITIALIZE SIMULATOR AND ENVIRONMENT
     # ============================================================
@@ -489,6 +610,16 @@ def main():
     # Configure planner to start planning
     planner.configure_for_execution(true_bin, X_WM_mustard)
 
+    # Plot prior belief (uniform distribution before any sensing)
+    prior_belief = np.array([0.5, 0.5])  # Initial uniform belief
+    plot_belief_bar_chart(
+        belief=prior_belief,
+        bins=['Bin 0', 'Bin 1'],
+        title=f'Prior Belief (Maximum Entropy)\nTrue Location: Bin {true_bin}',
+        filename='prior_belief.png',
+        true_bin=true_bin
+    )
+
     # Start Meshcat recording
     meshcat.StartRecording()
 
@@ -498,10 +629,40 @@ def main():
 
     # Run simulation loop
     point_clouds_visualized = False
+    posterior_belief_plotted = False
     try:
         while True:
             current_time = simulator.get_context().get_time()
+            
+            # Get state BEFORE advancing simulation (to detect transitions)
+            state_before = planner.get_state()
+            
             simulator.AdvanceTo(current_time + 0.1)
+            
+            # Get state AFTER advancing simulation
+            state_after = planner.get_state()
+            
+            # Detect when we've moved past RRBT_EXECUTING (entered POSE_ESTIMATION or later)
+            # This is when the arm has reached the light region and belief has been updated
+            if (state_before == PlannerState.RRBT_EXECUTING and 
+                state_after != PlannerState.RRBT_EXECUTING and
+                not posterior_belief_plotted):
+                
+                # Get current belief from belief estimator
+                sim_context = simulator.get_context()
+                belief_est_context = diagram.GetSubsystemContext(belief_estimator, sim_context)
+                posterior_belief = belief_estimator.GetOutputPort("belief").Eval(belief_est_context)
+                
+                # Plot posterior belief after first RRBT
+                plot_belief_bar_chart(
+                    belief=posterior_belief,
+                    bins=['Bin 0', 'Bin 1'],
+                    title=f'Posterior Belief after RRBT (Light Region)\nTrue Location: Bin {true_bin}',
+                    filename='posterior_belief_rrbt.png',
+                    true_bin=true_bin,
+                    confidence_threshold=float(config.planner.max_bin_uncertainty)
+                )
+                posterior_belief_plotted = True
             
             # Visualize point clouds once after first step
             if not point_clouds_visualized:

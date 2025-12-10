@@ -1,0 +1,1641 @@
+digraph _515 {
+rankdir=LR
+subgraph cluster515diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>Diagram</B><BR/>
+name=UnifiedPlanningDiagram
+</TD></TR></TABLE>>;
+subgraph clusters515out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s515out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">camera0_point_cloud</TD></TR>
+<TR><TD BORDER="1" PORT="1">camera1_point_cloud</TD></TR>
+<TR><TD BORDER="1" PORT="2">camera2_point_cloud</TD></TR>
+<TR><TD BORDER="1" PORT="3">camera3_point_cloud</TD></TR>
+<TR><TD BORDER="1" PORT="4">camera4_point_cloud</TD></TR>
+<TR><TD BORDER="1" PORT="5">camera5_point_cloud</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster515subsystems {
+color=white
+label=""
+subgraph cluster379diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>RobotDiagram</B><BR/>
+name=HardwareStation
+</TD></TR></TABLE>>;
+subgraph clusters379in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s379in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">iiwa.position</TD></TR>
+<TR><TD BORDER="1" PORT="1">wsg.position</TD></TR>
+<TR><TD BORDER="1" PORT="2">wsg.force_limit</TD></TR>
+<TR><TD BORDER="1" PORT="3">applied_generalized_force</TD></TR>
+<TR><TD BORDER="1" PORT="4">applied_spatial_force</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters379out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s379out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">iiwa.velocity_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="1">iiwa.actuation</TD></TR>
+<TR><TD BORDER="1" PORT="2">iiwa.position_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="3">iiwa.position_measured</TD></TR>
+<TR><TD BORDER="1" PORT="4">iiwa.velocity_estimated</TD></TR>
+<TR><TD BORDER="1" PORT="5">iiwa.state_estimated</TD></TR>
+<TR><TD BORDER="1" PORT="6">iiwa.torque_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="7">iiwa.torque_measured</TD></TR>
+<TR><TD BORDER="1" PORT="8">iiwa.torque_external</TD></TR>
+<TR><TD BORDER="1" PORT="9">wsg.state_measured</TD></TR>
+<TR><TD BORDER="1" PORT="10">wsg.force_measured</TD></TR>
+<TR><TD BORDER="1" PORT="11">camera0.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="12">camera0.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="13">camera0.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="14">camera1.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="15">camera1.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="16">camera1.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="17">camera2.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="18">camera2.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="19">camera2.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="20">camera3.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="21">camera3.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="22">camera3.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="23">camera4.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="24">camera4.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="25">camera4.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="26">camera5.rgb_image</TD></TR>
+<TR><TD BORDER="1" PORT="27">camera5.depth_image</TD></TR>
+<TR><TD BORDER="1" PORT="28">camera5.label_image</TD></TR>
+<TR><TD BORDER="1" PORT="29">geometry_pose</TD></TR>
+<TR><TD BORDER="1" PORT="30">deformable_body_configuration</TD></TR>
+<TR><TD BORDER="1" PORT="31">state</TD></TR>
+<TR><TD BORDER="1" PORT="32">body_poses</TD></TR>
+<TR><TD BORDER="1" PORT="33">body_spatial_velocities</TD></TR>
+<TR><TD BORDER="1" PORT="34">body_spatial_accelerations</TD></TR>
+<TR><TD BORDER="1" PORT="35">generalized_acceleration</TD></TR>
+<TR><TD BORDER="1" PORT="36">net_actuation</TD></TR>
+<TR><TD BORDER="1" PORT="37">reaction_forces</TD></TR>
+<TR><TD BORDER="1" PORT="38">contact_results</TD></TR>
+<TR><TD BORDER="1" PORT="39"><FONT COLOR="grey">WorldModelInstance_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="40"><FONT COLOR="grey">WorldModelInstance_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="41"><FONT COLOR="grey">WorldModelInstance_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="42"><FONT COLOR="grey">WorldModelInstance_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="43"><FONT COLOR="grey">DefaultModelInstance_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="44"><FONT COLOR="grey">DefaultModelInstance_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="45"><FONT COLOR="grey">DefaultModelInstance_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="46"><FONT COLOR="grey">DefaultModelInstance_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="47"><FONT COLOR="grey">bin0_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="48"><FONT COLOR="grey">bin0_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="49"><FONT COLOR="grey">bin0_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="50"><FONT COLOR="grey">bin0_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="51"><FONT COLOR="grey">bin1_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="52"><FONT COLOR="grey">bin1_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="53"><FONT COLOR="grey">bin1_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="54"><FONT COLOR="grey">bin1_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="55"><FONT COLOR="grey">floor_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="56"><FONT COLOR="grey">floor_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="57"><FONT COLOR="grey">floor_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="58"><FONT COLOR="grey">floor_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="59"><FONT COLOR="grey">camera0_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="60"><FONT COLOR="grey">camera0_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="61"><FONT COLOR="grey">camera0_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="62"><FONT COLOR="grey">camera0_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="63"><FONT COLOR="grey">camera1_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="64"><FONT COLOR="grey">camera1_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="65"><FONT COLOR="grey">camera1_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="66"><FONT COLOR="grey">camera1_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="67"><FONT COLOR="grey">camera2_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="68"><FONT COLOR="grey">camera2_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="69"><FONT COLOR="grey">camera2_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="70"><FONT COLOR="grey">camera2_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="71"><FONT COLOR="grey">camera3_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="72"><FONT COLOR="grey">camera3_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="73"><FONT COLOR="grey">camera3_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="74"><FONT COLOR="grey">camera3_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="75"><FONT COLOR="grey">camera4_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="76"><FONT COLOR="grey">camera4_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="77"><FONT COLOR="grey">camera4_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="78"><FONT COLOR="grey">camera4_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="79"><FONT COLOR="grey">camera5_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="80"><FONT COLOR="grey">camera5_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="81"><FONT COLOR="grey">camera5_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="82"><FONT COLOR="grey">camera5_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="83">iiwa_state</TD></TR>
+<TR><TD BORDER="1" PORT="84">iiwa_generalized_acceleration</TD></TR>
+<TR><TD BORDER="1" PORT="85">iiwa_generalized_contact_forces</TD></TR>
+<TR><TD BORDER="1" PORT="86">iiwa_net_actuation</TD></TR>
+<TR><TD BORDER="1" PORT="87">wsg_state</TD></TR>
+<TR><TD BORDER="1" PORT="88">wsg_generalized_acceleration</TD></TR>
+<TR><TD BORDER="1" PORT="89">wsg_generalized_contact_forces</TD></TR>
+<TR><TD BORDER="1" PORT="90">wsg_net_actuation</TD></TR>
+<TR><TD BORDER="1" PORT="91">mustard_state</TD></TR>
+<TR><TD BORDER="1" PORT="92">mustard_generalized_acceleration</TD></TR>
+<TR><TD BORDER="1" PORT="93">mustard_generalized_contact_forces</TD></TR>
+<TR><TD BORDER="1" PORT="94"><FONT COLOR="grey">mustard_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="95"><FONT COLOR="grey">square_bin_state</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="96"><FONT COLOR="grey">square_bin_generalized_acceleration</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="97"><FONT COLOR="grey">square_bin_generalized_contact_forces</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="98"><FONT COLOR="grey">square_bin_net_actuation</FONT></TD></TR>
+<TR><TD BORDER="1" PORT="99">query_object</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster379subsystems {
+color=white
+label=""
+s2 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>MultibodyPlant</B><BR/>
+name=plant
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >geometry_query</TD>
+<TD PORT="y0" BORDER="1" >geometry_pose</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >actuation</TD>
+<TD PORT="y1" BORDER="1" >deformable_body_configuration</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >applied_generalized_force</TD>
+<TD PORT="y2" BORDER="1" >state</TD>
+</TR>
+<TR>
+<TD PORT="u3" BORDER="1" >applied_spatial_force</TD>
+<TD PORT="y3" BORDER="1" >body_poses</TD>
+</TR>
+<TR>
+<TD PORT="u4" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_actuation</FONT></TD>
+<TD PORT="y4" BORDER="1" >body_spatial_velocities</TD>
+</TR>
+<TR>
+<TD PORT="u5" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_desired_state</FONT></TD>
+<TD PORT="y5" BORDER="1" >body_spatial_accelerations</TD>
+</TR>
+<TR>
+<TD PORT="u6" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_actuation</FONT></TD>
+<TD PORT="y6" BORDER="1" >generalized_acceleration</TD>
+</TR>
+<TR>
+<TD PORT="u7" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_desired_state</FONT></TD>
+<TD PORT="y7" BORDER="1" >net_actuation</TD>
+</TR>
+<TR>
+<TD PORT="u8" BORDER="1" ><FONT COLOR="grey">bin0_actuation</FONT></TD>
+<TD PORT="y8" BORDER="1" >reaction_forces</TD>
+</TR>
+<TR>
+<TD PORT="u9" BORDER="1" ><FONT COLOR="grey">bin0_desired_state</FONT></TD>
+<TD PORT="y9" BORDER="1" >contact_results</TD>
+</TR>
+<TR>
+<TD PORT="u10" BORDER="1" ><FONT COLOR="grey">bin1_actuation</FONT></TD>
+<TD PORT="y10" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u11" BORDER="1" ><FONT COLOR="grey">bin1_desired_state</FONT></TD>
+<TD PORT="y11" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u12" BORDER="1" ><FONT COLOR="grey">floor_actuation</FONT></TD>
+<TD PORT="y12" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u13" BORDER="1" ><FONT COLOR="grey">floor_desired_state</FONT></TD>
+<TD PORT="y13" BORDER="1" ><FONT COLOR="grey">WorldModelInstance_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u14" BORDER="1" ><FONT COLOR="grey">camera0_actuation</FONT></TD>
+<TD PORT="y14" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u15" BORDER="1" ><FONT COLOR="grey">camera0_desired_state</FONT></TD>
+<TD PORT="y15" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u16" BORDER="1" ><FONT COLOR="grey">camera1_actuation</FONT></TD>
+<TD PORT="y16" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u17" BORDER="1" ><FONT COLOR="grey">camera1_desired_state</FONT></TD>
+<TD PORT="y17" BORDER="1" ><FONT COLOR="grey">DefaultModelInstance_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u18" BORDER="1" ><FONT COLOR="grey">camera2_actuation</FONT></TD>
+<TD PORT="y18" BORDER="1" ><FONT COLOR="grey">bin0_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u19" BORDER="1" ><FONT COLOR="grey">camera2_desired_state</FONT></TD>
+<TD PORT="y19" BORDER="1" ><FONT COLOR="grey">bin0_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u20" BORDER="1" ><FONT COLOR="grey">camera3_actuation</FONT></TD>
+<TD PORT="y20" BORDER="1" ><FONT COLOR="grey">bin0_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u21" BORDER="1" ><FONT COLOR="grey">camera3_desired_state</FONT></TD>
+<TD PORT="y21" BORDER="1" ><FONT COLOR="grey">bin0_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u22" BORDER="1" ><FONT COLOR="grey">camera4_actuation</FONT></TD>
+<TD PORT="y22" BORDER="1" ><FONT COLOR="grey">bin1_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u23" BORDER="1" ><FONT COLOR="grey">camera4_desired_state</FONT></TD>
+<TD PORT="y23" BORDER="1" ><FONT COLOR="grey">bin1_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u24" BORDER="1" ><FONT COLOR="grey">camera5_actuation</FONT></TD>
+<TD PORT="y24" BORDER="1" ><FONT COLOR="grey">bin1_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u25" BORDER="1" ><FONT COLOR="grey">camera5_desired_state</FONT></TD>
+<TD PORT="y25" BORDER="1" ><FONT COLOR="grey">bin1_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u26" BORDER="1" >iiwa_actuation</TD>
+<TD PORT="y26" BORDER="1" ><FONT COLOR="grey">floor_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u27" BORDER="1" >iiwa_desired_state</TD>
+<TD PORT="y27" BORDER="1" ><FONT COLOR="grey">floor_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u28" BORDER="1" >wsg_actuation</TD>
+<TD PORT="y28" BORDER="1" ><FONT COLOR="grey">floor_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u29" BORDER="1" >wsg_desired_state</TD>
+<TD PORT="y29" BORDER="1" ><FONT COLOR="grey">floor_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u30" BORDER="1" ><FONT COLOR="grey">mustard_actuation</FONT></TD>
+<TD PORT="y30" BORDER="1" ><FONT COLOR="grey">camera0_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u31" BORDER="1" ><FONT COLOR="grey">mustard_desired_state</FONT></TD>
+<TD PORT="y31" BORDER="1" ><FONT COLOR="grey">camera0_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u32" BORDER="1" ><FONT COLOR="grey">square_bin_actuation</FONT></TD>
+<TD PORT="y32" BORDER="1" ><FONT COLOR="grey">camera0_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u33" BORDER="1" ><FONT COLOR="grey">square_bin_desired_state</FONT></TD>
+<TD PORT="y33" BORDER="1" ><FONT COLOR="grey">camera0_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="u34" BORDER="1" COLOR="grey" ROWSPAN="36" SIDES="BL"></TD>
+<TD PORT="y34" BORDER="1" ><FONT COLOR="grey">camera1_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y35" BORDER="1" ><FONT COLOR="grey">camera1_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y36" BORDER="1" ><FONT COLOR="grey">camera1_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y37" BORDER="1" ><FONT COLOR="grey">camera1_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y38" BORDER="1" ><FONT COLOR="grey">camera2_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y39" BORDER="1" ><FONT COLOR="grey">camera2_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y40" BORDER="1" ><FONT COLOR="grey">camera2_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y41" BORDER="1" ><FONT COLOR="grey">camera2_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y42" BORDER="1" ><FONT COLOR="grey">camera3_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y43" BORDER="1" ><FONT COLOR="grey">camera3_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y44" BORDER="1" ><FONT COLOR="grey">camera3_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y45" BORDER="1" ><FONT COLOR="grey">camera3_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y46" BORDER="1" ><FONT COLOR="grey">camera4_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y47" BORDER="1" ><FONT COLOR="grey">camera4_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y48" BORDER="1" ><FONT COLOR="grey">camera4_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y49" BORDER="1" ><FONT COLOR="grey">camera4_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y50" BORDER="1" ><FONT COLOR="grey">camera5_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y51" BORDER="1" ><FONT COLOR="grey">camera5_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y52" BORDER="1" ><FONT COLOR="grey">camera5_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y53" BORDER="1" ><FONT COLOR="grey">camera5_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y54" BORDER="1" >iiwa_state</TD>
+</TR>
+<TR>
+<TD PORT="y55" BORDER="1" >iiwa_generalized_acceleration</TD>
+</TR>
+<TR>
+<TD PORT="y56" BORDER="1" >iiwa_generalized_contact_forces</TD>
+</TR>
+<TR>
+<TD PORT="y57" BORDER="1" >iiwa_net_actuation</TD>
+</TR>
+<TR>
+<TD PORT="y58" BORDER="1" >wsg_state</TD>
+</TR>
+<TR>
+<TD PORT="y59" BORDER="1" >wsg_generalized_acceleration</TD>
+</TR>
+<TR>
+<TD PORT="y60" BORDER="1" >wsg_generalized_contact_forces</TD>
+</TR>
+<TR>
+<TD PORT="y61" BORDER="1" >wsg_net_actuation</TD>
+</TR>
+<TR>
+<TD PORT="y62" BORDER="1" >mustard_state</TD>
+</TR>
+<TR>
+<TD PORT="y63" BORDER="1" >mustard_generalized_acceleration</TD>
+</TR>
+<TR>
+<TD PORT="y64" BORDER="1" >mustard_generalized_contact_forces</TD>
+</TR>
+<TR>
+<TD PORT="y65" BORDER="1" ><FONT COLOR="grey">mustard_net_actuation</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y66" BORDER="1" ><FONT COLOR="grey">square_bin_state</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y67" BORDER="1" ><FONT COLOR="grey">square_bin_generalized_acceleration</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y68" BORDER="1" ><FONT COLOR="grey">square_bin_generalized_contact_forces</FONT></TD>
+</TR>
+<TR>
+<TD PORT="y69" BORDER="1" ><FONT COLOR="grey">square_bin_net_actuation</FONT></TD>
+</TR>
+</TABLE>
+>];
+s3 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>SceneGraph</B><BR/>
+name=scene_graph
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >plant_pose</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="4">query</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >plant_configuration</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >inertia_visualizer_pose</TD>
+</TR>
+<TR>
+<TD PORT="u3" BORDER="1" >inertia_visualizer_configuration</TD>
+</TR>
+</TABLE>
+>];
+subgraph cluster281diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>SimIiwaDriver</B><BR/>
+name=iiwa
+</TD></TR></TABLE>>;
+subgraph clusters281in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s281in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">state</TD></TR>
+<TR><TD BORDER="1" PORT="1">generalized_contact_forces</TD></TR>
+<TR><TD BORDER="1" PORT="2">position</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters281out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s281out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">velocity_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="1">actuation</TD></TR>
+<TR><TD BORDER="1" PORT="2">position_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="3">position_measured</TD></TR>
+<TR><TD BORDER="1" PORT="4">velocity_estimated</TD></TR>
+<TR><TD BORDER="1" PORT="5">state_estimated</TD></TR>
+<TR><TD BORDER="1" PORT="6">torque_commanded</TD></TR>
+<TR><TD BORDER="1" PORT="7">torque_measured</TD></TR>
+<TR><TD BORDER="1" PORT="8">torque_external</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster281subsystems {
+color=white
+label=""
+s282 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Demultiplexer</B><BR/>
+name=demultiplexer
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="2">u0</TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >y1</TD>
+</TR>
+</TABLE>
+>];
+s283 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>FirstOrderLowPassFilter</B><BR/>
+name=low_pass_filter
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+</TABLE>
+>];
+subgraph cluster284diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>StateInterpolatorWithDiscreteDerivative</B><BR/>
+name=velocity_interpolator
+</TD></TR></TABLE>>;
+subgraph clusters284in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s284in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">position</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters284out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s284out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">state</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster284subsystems {
+color=white
+label=""
+s285 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DiscreteDerivative</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >dudt</TD>
+</TR>
+</TABLE>
+>];
+s286 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Multiplexer</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="2">y0</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >u1</TD>
+</TR>
+</TABLE>
+>];
+s285:y0:e -> s286:u1:w
+s284in:0:e -> s285:u0:w [color=blue];
+s284in:0:e -> s286:u0:w [color=blue];
+s286:y0:e -> s284out:0:w [color=green];
+}
+}
+subgraph cluster288diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>InverseDynamicsController</B><BR/>
+name=inverse_dynamics_controller
+</TD></TR></TABLE>>;
+subgraph clusters288in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s288in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">estimated_state</TD></TR>
+<TR><TD BORDER="1" PORT="1">desired_state</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters288out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s288out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">actuation</TD></TR>
+<TR><TD BORDER="1" PORT="1">generalized_force</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster288subsystems {
+color=white
+label=""
+s289 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>InverseDynamics</B><BR/>
+name=InverseDynamics
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >estimated_state</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="2">generalized_force</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >desired_acceleration</TD>
+</TR>
+</TABLE>
+>];
+s290 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>PidController</B><BR/>
+name=pid
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >estimated_state</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="2">control</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >desired_state</TD>
+</TR>
+</TABLE>
+>];
+s291 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Adder</B><BR/>
+name=+
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="2">sum</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >u1</TD>
+</TR>
+</TABLE>
+>];
+s292 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>ConstantVectorSource</B><BR/>
+name=desired_acceleration=0
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BL"></TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+</TABLE>
+>];
+s293 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>SparseMatrixGain</B><BR/>
+name=B⁻¹
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >y</TD>
+</TR>
+</TABLE>
+>];
+s289:y0:e -> s293:u0:w
+s291:y0:e -> s289:u1:w
+s290:y0:e -> s291:u0:w
+s292:y0:e -> s291:u1:w
+s288in:0:e -> s290:u0:w [color=blue];
+s288in:0:e -> s289:u0:w [color=blue];
+s288in:1:e -> s290:u1:w [color=blue];
+s293:y0:e -> s288out:0:w [color=green];
+s289:y0:e -> s288out:1:w [color=green];
+}
+}
+s296 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Demultiplexer</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="2">u0</TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >y1</TD>
+</TR>
+</TABLE>
+>];
+s297 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Saturation</B><BR/>
+name=torque_limiter
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+</TABLE>
+>];
+s298 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>SparseMatrixGain</B><BR/>
+name=B⁻¹
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >y</TD>
+</TR>
+</TABLE>
+>];
+s299 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>PassThrough</B><BR/>
+name=position_pass_through
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >y</TD>
+</TR>
+</TABLE>
+>];
+s300 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>PassThrough</B><BR/>
+name=state_pass_through
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >y</TD>
+</TR>
+</TABLE>
+>];
+s284out:0:e -> s288in:1:w
+s288out:1:e -> s297:u0:w
+s284out:0:e -> s296:u0:w
+s297:y0:e -> s298:u0:w
+s281in:0:e -> s288in:0:w [color=blue];
+s281in:0:e -> s282:u0:w [color=blue];
+s281in:0:e -> s300:u0:w [color=blue];
+s281in:1:e -> s283:u0:w [color=blue];
+s281in:2:e -> s284in:0:w [color=blue];
+s281in:2:e -> s299:u0:w [color=blue];
+s296:y1:e -> s281out:0:w [color=green];
+s298:y0:e -> s281out:1:w [color=green];
+s299:y0:e -> s281out:2:w [color=green];
+s282:y0:e -> s281out:3:w [color=green];
+s282:y1:e -> s281out:4:w [color=green];
+s300:y0:e -> s281out:5:w [color=green];
+s297:y0:e -> s281out:6:w [color=green];
+s297:y0:e -> s281out:7:w [color=green];
+s283:y0:e -> s281out:8:w [color=green];
+}
+}
+subgraph cluster306diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>SchunkWsgPositionController</B><BR/>
+name=wsg.controller
+</TD></TR></TABLE>>;
+subgraph clusters306in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s306in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">desired_position</TD></TR>
+<TR><TD BORDER="1" PORT="1">force_limit</TD></TR>
+<TR><TD BORDER="1" PORT="2">state</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters306out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s306out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">generalized_force</TD></TR>
+<TR><TD BORDER="1" PORT="1">grip_force</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster306subsystems {
+color=white
+label=""
+s307 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>SchunkWsgPdController</B><BR/>
+name=wsg_controller
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >desired_state</TD>
+<TD PORT="y0" BORDER="1" >generalized_force</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >force_limit</TD>
+<TD PORT="y1" BORDER="1" >grip_force</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >state</TD>
+<TD PORT="y2" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+subgraph cluster308diagram {
+color=black
+concentrate=true
+label=<<TABLE BORDER="0"><TR><TD>
+<B>StateInterpolatorWithDiscreteDerivative</B>
+</TD></TR></TABLE>>;
+subgraph clusters308in {
+rank=same
+color=lightgrey
+style=filled
+label="input ports"
+s308in [shape=none, label=<
+<TABLE BORDER="0" COLOR="blue" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">position</TD></TR>
+</TABLE>
+>];
+}
+subgraph clusters308out {
+rank=same
+color=lightgrey
+style=filled
+label="output ports"
+s308out [shape=none, label=<
+<TABLE BORDER="0" COLOR="green" CELLSPACING="3" STYLE="rounded">
+<TR><TD BORDER="1" PORT="0">state</TD></TR>
+</TABLE>
+>];
+}
+subgraph cluster308subsystems {
+color=white
+label=""
+s309 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DiscreteDerivative</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u</TD>
+<TD PORT="y0" BORDER="1" >dudt</TD>
+</TR>
+</TABLE>
+>];
+s310 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>Multiplexer</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="2">y0</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >u1</TD>
+</TR>
+</TABLE>
+>];
+s309:y0:e -> s310:u1:w
+s308in:0:e -> s309:u0:w [color=blue];
+s308in:0:e -> s310:u0:w [color=blue];
+s310:y0:e -> s308out:0:w [color=green];
+}
+}
+s308out:0:e -> s307:u0:w
+s306in:0:e -> s308in:0:w [color=blue];
+s306in:1:e -> s307:u1:w [color=blue];
+s306in:2:e -> s307:u2:w [color=blue];
+s307:y0:e -> s306out:0:w [color=green];
+s307:y1:e -> s306out:1:w [color=green];
+}
+}
+s313 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>MatrixGain</B>
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >u0</TD>
+<TD PORT="y0" BORDER="1" >y0</TD>
+</TR>
+</TABLE>
+>];
+s315 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera0
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s316 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera1
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s317 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera2
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s318 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera3
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s319 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera4
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s320 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>RgbdSensor</B><BR/>
+name=rgbd_sensor_camera5
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="6">geometry_query</TD>
+<TD PORT="y0" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >depth_image_32f</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >depth_image_16u</TD>
+</TR>
+<TR>
+<TD PORT="y3" BORDER="1" >label_image</TD>
+</TR>
+<TR>
+<TD PORT="y4" BORDER="1" >body_pose_in_world</TD>
+</TR>
+<TR>
+<TD PORT="y5" BORDER="1" >image_time</TD>
+</TR>
+</TABLE>
+>];
+s321 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>MeshcatVisualizer</B><BR/>
+name=meshcat_visualizer(illustration)<BR/>
+path=/drake/illustration
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >query_object</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+meshcat_in [label=Meshcat, color=magenta];
+s321:e -> meshcat_in [style=dashed, color=magenta]
+s322 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>MeshcatVisualizer</B><BR/>
+name=meshcat_visualizer(inertia)<BR/>
+path=/drake/inertia
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >query_object</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+meshcat_in [label=Meshcat, color=magenta];
+s322:e -> meshcat_in [style=dashed, color=magenta]
+s323 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>MeshcatVisualizer</B><BR/>
+name=meshcat_visualizer(proximity)<BR/>
+path=/drake/proximity
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >query_object</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+meshcat_in [label=Meshcat, color=magenta];
+s323:e -> meshcat_in [style=dashed, color=magenta]
+s324 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>ContactVisualizer</B><BR/>
+name=meshcat_contact_visualizer<BR/>
+path=/drake/contact_forces
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >contact_results</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="2" SIDES="BR"></TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >query_object</TD>
+</TR>
+</TABLE>
+>];
+meshcat_in [label=Meshcat, color=magenta];
+s324:e -> meshcat_in [style=dashed, color=magenta]
+s325 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>InertiaVisualizer</B><BR/>
+name=inertia_visualizer
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >plant_geometry_pose</TD>
+<TD PORT="y0" BORDER="1" >geometry_pose</TD>
+</TR>
+</TABLE>
+>];
+s2:y58:e -> s313:u0:w
+s2:y0:e -> s3:u0:w
+s2:y1:e -> s3:u1:w
+s325:y0:e -> s3:u2:w
+s3:y0:e -> s2:u0:w
+s281out:1:e -> s2:u26:w
+s306out:0:e -> s2:u28:w
+s2:y54:e -> s281in:0:w
+s2:y56:e -> s281in:1:w
+s2:y58:e -> s306in:2:w
+s3:y0:e -> s319:u0:w
+s3:y0:e -> s322:u0:w
+s2:y9:e -> s324:u0:w
+s3:y0:e -> s324:u1:w
+s3:y0:e -> s320:u0:w
+s3:y0:e -> s321:u0:w
+s3:y0:e -> s315:u0:w
+s2:y0:e -> s325:u0:w
+s3:y0:e -> s317:u0:w
+s3:y0:e -> s323:u0:w
+s3:y0:e -> s316:u0:w
+s3:y0:e -> s318:u0:w
+s379in:0:e -> s281in:2:w [color=blue];
+s379in:1:e -> s306in:0:w [color=blue];
+s379in:2:e -> s306in:1:w [color=blue];
+s379in:3:e -> s2:u2:w [color=blue];
+s379in:4:e -> s2:u3:w [color=blue];
+s281out:0:e -> s379out:0:w [color=green];
+s281out:1:e -> s379out:1:w [color=green];
+s281out:2:e -> s379out:2:w [color=green];
+s281out:3:e -> s379out:3:w [color=green];
+s281out:4:e -> s379out:4:w [color=green];
+s281out:5:e -> s379out:5:w [color=green];
+s281out:6:e -> s379out:6:w [color=green];
+s281out:7:e -> s379out:7:w [color=green];
+s281out:8:e -> s379out:8:w [color=green];
+s313:y0:e -> s379out:9:w [color=green];
+s306out:1:e -> s379out:10:w [color=green];
+s315:y0:e -> s379out:11:w [color=green];
+s315:y1:e -> s379out:12:w [color=green];
+s315:y3:e -> s379out:13:w [color=green];
+s316:y0:e -> s379out:14:w [color=green];
+s316:y1:e -> s379out:15:w [color=green];
+s316:y3:e -> s379out:16:w [color=green];
+s317:y0:e -> s379out:17:w [color=green];
+s317:y1:e -> s379out:18:w [color=green];
+s317:y3:e -> s379out:19:w [color=green];
+s318:y0:e -> s379out:20:w [color=green];
+s318:y1:e -> s379out:21:w [color=green];
+s318:y3:e -> s379out:22:w [color=green];
+s319:y0:e -> s379out:23:w [color=green];
+s319:y1:e -> s379out:24:w [color=green];
+s319:y3:e -> s379out:25:w [color=green];
+s320:y0:e -> s379out:26:w [color=green];
+s320:y1:e -> s379out:27:w [color=green];
+s320:y3:e -> s379out:28:w [color=green];
+s2:y0:e -> s379out:29:w [color=green];
+s2:y1:e -> s379out:30:w [color=green];
+s2:y2:e -> s379out:31:w [color=green];
+s2:y3:e -> s379out:32:w [color=green];
+s2:y4:e -> s379out:33:w [color=green];
+s2:y5:e -> s379out:34:w [color=green];
+s2:y6:e -> s379out:35:w [color=green];
+s2:y7:e -> s379out:36:w [color=green];
+s2:y8:e -> s379out:37:w [color=green];
+s2:y9:e -> s379out:38:w [color=green];
+s2:y10:e -> s379out:39:w [color=green];
+s2:y11:e -> s379out:40:w [color=green];
+s2:y12:e -> s379out:41:w [color=green];
+s2:y13:e -> s379out:42:w [color=green];
+s2:y14:e -> s379out:43:w [color=green];
+s2:y15:e -> s379out:44:w [color=green];
+s2:y16:e -> s379out:45:w [color=green];
+s2:y17:e -> s379out:46:w [color=green];
+s2:y18:e -> s379out:47:w [color=green];
+s2:y19:e -> s379out:48:w [color=green];
+s2:y20:e -> s379out:49:w [color=green];
+s2:y21:e -> s379out:50:w [color=green];
+s2:y22:e -> s379out:51:w [color=green];
+s2:y23:e -> s379out:52:w [color=green];
+s2:y24:e -> s379out:53:w [color=green];
+s2:y25:e -> s379out:54:w [color=green];
+s2:y26:e -> s379out:55:w [color=green];
+s2:y27:e -> s379out:56:w [color=green];
+s2:y28:e -> s379out:57:w [color=green];
+s2:y29:e -> s379out:58:w [color=green];
+s2:y30:e -> s379out:59:w [color=green];
+s2:y31:e -> s379out:60:w [color=green];
+s2:y32:e -> s379out:61:w [color=green];
+s2:y33:e -> s379out:62:w [color=green];
+s2:y34:e -> s379out:63:w [color=green];
+s2:y35:e -> s379out:64:w [color=green];
+s2:y36:e -> s379out:65:w [color=green];
+s2:y37:e -> s379out:66:w [color=green];
+s2:y38:e -> s379out:67:w [color=green];
+s2:y39:e -> s379out:68:w [color=green];
+s2:y40:e -> s379out:69:w [color=green];
+s2:y41:e -> s379out:70:w [color=green];
+s2:y42:e -> s379out:71:w [color=green];
+s2:y43:e -> s379out:72:w [color=green];
+s2:y44:e -> s379out:73:w [color=green];
+s2:y45:e -> s379out:74:w [color=green];
+s2:y46:e -> s379out:75:w [color=green];
+s2:y47:e -> s379out:76:w [color=green];
+s2:y48:e -> s379out:77:w [color=green];
+s2:y49:e -> s379out:78:w [color=green];
+s2:y50:e -> s379out:79:w [color=green];
+s2:y51:e -> s379out:80:w [color=green];
+s2:y52:e -> s379out:81:w [color=green];
+s2:y53:e -> s379out:82:w [color=green];
+s2:y54:e -> s379out:83:w [color=green];
+s2:y55:e -> s379out:84:w [color=green];
+s2:y56:e -> s379out:85:w [color=green];
+s2:y57:e -> s379out:86:w [color=green];
+s2:y58:e -> s379out:87:w [color=green];
+s2:y59:e -> s379out:88:w [color=green];
+s2:y60:e -> s379out:89:w [color=green];
+s2:y61:e -> s379out:90:w [color=green];
+s2:y62:e -> s379out:91:w [color=green];
+s2:y63:e -> s379out:92:w [color=green];
+s2:y64:e -> s379out:93:w [color=green];
+s2:y65:e -> s379out:94:w [color=green];
+s2:y66:e -> s379out:95:w [color=green];
+s2:y67:e -> s379out:96:w [color=green];
+s2:y68:e -> s379out:97:w [color=green];
+s2:y69:e -> s379out:98:w [color=green];
+s3:y0:e -> s379out:99:w [color=green];
+}
+}
+s386 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.planning.planner_system.PlannerSystem</B><BR/>
+name=PlannerSystem
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >estimated_mustard_pose</TD>
+<TD PORT="y0" BORDER="1" >iiwa_position_command</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >position_covariance</TD>
+<TD PORT="y1" BORDER="1" >wsg_position_command</TD>
+</TR>
+</TABLE>
+>];
+s387 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.perception.light_and_dark.BinLightDarkRegionSensorSystem</B><BR/>
+name=LightDarkPerception
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="2">iiwa.position</TD>
+<TD PORT="y0" BORDER="1" >in_light_region</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >sensor_model</TD>
+</TR>
+</TABLE>
+>];
+s388 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.perception.light_and_dark.MustardPositionLightDarkRegionSensorSystem</B><BR/>
+name=MustardPositionPerception
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="3">iiwa.position</TD>
+<TD PORT="y0" BORDER="1" >target_measurement</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >in_light_region</TD>
+</TR>
+<TR>
+<TD PORT="y2" BORDER="1" >measurement_variance</TD>
+</TR>
+</TABLE>
+>];
+s389 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.estimation.belief_estimator.BinBeliefEstimatorSystem</B><BR/>
+name=BinBeliefEstimator
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" ROWSPAN="2">sensor_model</TD>
+<TD PORT="y0" BORDER="1" >belief</TD>
+</TR>
+<TR>
+<TD PORT="y1" BORDER="1" >belief_confident</TD>
+</TR>
+</TABLE>
+>];
+s390 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.visualization.belief_bar_chart.BeliefBarChartSystem</B><BR/>
+name=BeliefBarChart
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >belief</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="1" SIDES="BR"></TD>
+</TR>
+</TABLE>
+>];
+s391 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera0.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s392 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera0.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s393 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera1.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s394 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera1.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s395 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera2.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s396 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera2.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s397 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera3.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s398 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera3.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s399 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera4.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s400 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera4.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s401 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>DepthImageToPointCloud</B><BR/>
+name=camera5.point_cloud
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >depth_image</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="3">point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >color_image</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera_pose</TD>
+</TR>
+</TABLE>
+>];
+s402 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>manipulation.systems.ExtractPose</B><BR/>
+name=camera5.pose
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >poses</TD>
+<TD PORT="y0" BORDER="1" >pose</TD>
+</TR>
+</TABLE>
+>];
+s403 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.perception.mustard_pose_estimator.MustardPoseEstimatorSystem</B><BR/>
+name=MustardPoseEstimator
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >camera0_point_cloud</TD>
+<TD PORT="y0" BORDER="1" ROWSPAN="8">estimated_pose</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >camera1_point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u2" BORDER="1" >camera2_point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u3" BORDER="1" >camera3_point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u4" BORDER="1" >camera4_point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u5" BORDER="1" >camera5_point_cloud</TD>
+</TR>
+<TR>
+<TD PORT="u6" BORDER="1" >belief</TD>
+</TR>
+<TR>
+<TD PORT="u7" BORDER="1" >estimation_trigger</TD>
+</TR>
+</TABLE>
+>];
+s507 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.estimation.mustard_position_estimator.MustardPositionBeliefEstimatorSystem</B><BR/>
+name=MustardPositionBeliefEstimator
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >measurement_variance</TD>
+<TD PORT="y0" BORDER="1" >position_mean</TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >estimated_pose</TD>
+<TD PORT="y1" BORDER="1" >covariance</TD>
+</TR>
+</TABLE>
+>];
+s508 [shape=none, border=0, label=<
+<TABLE BORDER="0" CELLSPACING="0">
+<TR><TD BORDER="1" COLSPAN="2">
+<B>src.visualization.covariance_ellipsoid.CovarianceEllipsoidSystem</B><BR/>
+name=CovarianceEllipsoid
+</TD></TR>
+<TR>
+<TD PORT="u0" BORDER="1" >position</TD>
+<TD PORT="y0" BORDER="1" COLOR="grey" ROWSPAN="2" SIDES="BR"></TD>
+</TR>
+<TR>
+<TD PORT="u1" BORDER="1" >covariance</TD>
+</TR>
+</TABLE>
+>];
+s403:y0:e -> s386:u0:w
+s507:y1:e -> s386:u1:w
+s386:y0:e -> s379in:0:w
+s386:y1:e -> s379in:1:w
+s379out:3:e -> s387:u0:w
+s379out:3:e -> s388:u0:w
+s387:y1:e -> s389:u0:w
+s389:y0:e -> s390:u0:w
+s379out:12:e -> s391:u0:w
+s379out:11:e -> s391:u1:w
+s392:y0:e -> s391:u2:w
+s379out:32:e -> s392:u0:w
+s379out:15:e -> s393:u0:w
+s379out:14:e -> s393:u1:w
+s394:y0:e -> s393:u2:w
+s379out:32:e -> s394:u0:w
+s379out:18:e -> s395:u0:w
+s379out:17:e -> s395:u1:w
+s396:y0:e -> s395:u2:w
+s379out:32:e -> s396:u0:w
+s379out:21:e -> s397:u0:w
+s379out:20:e -> s397:u1:w
+s398:y0:e -> s397:u2:w
+s379out:32:e -> s398:u0:w
+s379out:24:e -> s399:u0:w
+s379out:23:e -> s399:u1:w
+s400:y0:e -> s399:u2:w
+s379out:32:e -> s400:u0:w
+s379out:27:e -> s401:u0:w
+s379out:26:e -> s401:u1:w
+s402:y0:e -> s401:u2:w
+s379out:32:e -> s402:u0:w
+s391:y0:e -> s403:u0:w
+s393:y0:e -> s403:u1:w
+s395:y0:e -> s403:u2:w
+s397:y0:e -> s403:u3:w
+s399:y0:e -> s403:u4:w
+s401:y0:e -> s403:u5:w
+s389:y0:e -> s403:u6:w
+s389:y1:e -> s403:u7:w
+s507:y0:e -> s508:u0:w
+s507:y1:e -> s508:u1:w
+s388:y2:e -> s507:u0:w
+s403:y0:e -> s507:u1:w
+s391:y0:e -> s515out:0:w [color=green];
+s393:y0:e -> s515out:1:w [color=green];
+s395:y0:e -> s515out:2:w [color=green];
+s397:y0:e -> s515out:3:w [color=green];
+s399:y0:e -> s515out:4:w [color=green];
+s401:y0:e -> s515out:5:w [color=green];
+}
+}
+}

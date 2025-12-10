@@ -350,10 +350,14 @@ class PlannerSystem(LeafSystem):
             
             # Update gripper command based on trajectory phase
             # Order matters: check open time first (it comes after close time)
+            # Note: WSG gripper position command is the gap between fingers in meters
+            #   - 0.1m (100mm) = fully open
+            #   - 0.0m = fully closed (but this can cause slipping)
+            #   - ~0.02m works well for grasping cylindrical objects like mustard bottle
             if self._grasp_open_time is not None and t_traj >= self._grasp_open_time:
                 self._gripper_command = 0.1  # Open gripper (release object)
             elif t_traj >= self._grasp_close_time:
-                self._gripper_command = 0.0  # Close gripper (holding object)
+                self._gripper_command = 0.02  # Close gripper with small gap for firm grasp
             else:
                 self._gripper_command = 0.1  # Keep gripper open (before grasp)
             
@@ -1068,7 +1072,7 @@ class PlannerSystem(LeafSystem):
             t_home = dist_current_to_home * time_per_rad
             t_pregrasp = t_home + dist_home_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-            t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
+            t_grasp_end = t_grasp_start + 2.0  # 2 seconds hold for gripper to firmly close
             
             # Build trajectory with optional intermediate lift and transfer waypoints
             if use_intermediate_lift:
@@ -1117,7 +1121,7 @@ class PlannerSystem(LeafSystem):
             
             t_pregrasp = dist_current_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-            t_grasp_end = t_grasp_start + 1.0  # 1 second hold for gripper close
+            t_grasp_end = t_grasp_start + 2.0  # 2 seconds hold for gripper to firmly close
             
             # Build trajectory with optional intermediate lift and transfer waypoints
             if use_intermediate_lift:

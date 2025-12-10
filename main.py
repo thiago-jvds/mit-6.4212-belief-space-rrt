@@ -49,7 +49,7 @@ from src.utils.camera_pose_manager import restore_camera_pose
 # ============================================================
 # RANDOM SEED CONFIGURATION - Set this for deterministic runs
 # ============================================================
-RANDOM_SEED = 25
+RANDOM_SEED = 7
 
 # Seed all random number generators for reproducibility
 np.random.seed(RANDOM_SEED)  # Global numpy random state (for external libraries)
@@ -595,6 +595,18 @@ def main():
 
     # Force publish to update Meshcat visualization with new mustard position
     diagram.ForcedPublish(sim_context)
+
+    # ============================================================
+    # LET THE MUSTARD BOTTLE SETTLE
+    # ============================================================
+    # The bottle is placed 0.2m above the bin and falls under gravity.
+    # We need to let physics simulation run so the bottle settles before
+    # collecting point clouds for pose estimation.
+    SETTLE_TIME = 2.0  # seconds for bottle to fall and settle
+    print(f"\nLetting mustard bottle settle for {SETTLE_TIME}s...")
+    current_time = simulator.get_context().get_time()
+    simulator.AdvanceTo(current_time + SETTLE_TIME)
+    print(f"  Bottle settled. Simulation time: {simulator.get_context().get_time():.2f}s")
 
     # Update belief estimator with correct true_bin
     # Note: BeliefEstimatorSystem stores true_bin as instance variable

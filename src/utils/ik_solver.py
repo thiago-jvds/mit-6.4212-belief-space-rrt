@@ -23,6 +23,7 @@ def solve_ik_for_pose(
     ),
     theta_bound: float = 0.01,
     pos_tol: float = 0.015,
+    q_initial: tuple = None,
 ) -> tuple:
     """
     Solve IK for a single end-effector pose.
@@ -30,9 +31,10 @@ def solve_ik_for_pose(
     Args:
         plant: A MultibodyPlant with the iiwa + gripper model.
         X_WG_target: Desired gripper pose in world frame.
-        q_nominal: Nominal joint angles for joint-centering.
+        q_nominal: Nominal joint angles for joint-centering cost.
         theta_bound: Orientation tolerance (radians).
         pos_tol: Position tolerance (meters).
+        q_initial: Initial guess for the solver. If None, uses q_nominal.
 
     Returns:
         q_solution: 7 element tuple representing the Optimal
@@ -40,7 +42,10 @@ def solve_ik_for_pose(
     """
     world_frame = plant.world_frame()
 
-    gripper_frame = plant.GetFrameByName("body")
+    # Get the WSG gripper body frame, explicitly specifying the model instance
+    # to avoid ambiguity if other models have a "body" frame
+    wsg_model = plant.GetModelInstanceByName("wsg")
+    gripper_frame = plant.GetFrameByName("body", wsg_model)
 
     ik = InverseKinematics(plant)
 
@@ -65,7 +70,9 @@ def solve_ik_for_pose(
 
     prog.AddQuadraticCost(np.identity(len(q_vars)), q_nominal, q_vars)
 
-    prog.SetInitialGuess(q_vars, q_nominal)
+    # Use q_initial as the starting point for the solver if provided
+    initial_guess = q_initial if q_initial is not None else q_nominal
+    prog.SetInitialGuess(q_vars, initial_guess)
 
     result = Solve(prog)
     if not result.is_success():

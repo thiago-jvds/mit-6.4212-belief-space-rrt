@@ -12,8 +12,8 @@ for proper Bayes filter execution.
 """
 
 import numpy as np
-from src.simulation.simulation_tools import IiwaProblemBelief
-from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_buckets
+from src.simulation.simulation_tools import IiwaProblemBinBelief
+from src.estimation.bayes_filter import calculate_misclassification_risk, expected_posterior_all_bins
 from typing import List
 from pydrake.all import (
     Sphere,
@@ -40,7 +40,7 @@ def visualize_belief_path(problem, path, meshcat, belief_nodes=None):
     wsg_body = plant.GetBodyByName("body", plant.GetModelInstanceByName("wsg"))
 
     # Initialize with uniform prior
-    belief = np.ones(problem.n_buckets) / problem.n_buckets
+    belief = np.ones(problem.n_bins) / problem.n_bins
 
     for i, q in enumerate(path):
         # Get gripper position via forward kinematics
@@ -53,9 +53,9 @@ def visualize_belief_path(problem, path, meshcat, belief_nodes=None):
         in_light = problem.is_in_light(q)
         
         if in_light:
-            belief = expected_posterior_all_buckets(
+            belief = expected_posterior_all_bins(
                 belief, tpr, fpr,
-                assumed_bucket=problem.true_bucket
+                assumed_bin=problem.true_bin
             )
         
         misclass_risk = calculate_misclassification_risk(belief)

@@ -29,12 +29,13 @@ from pydrake.all import (
     Rgba,
     RigidTransform,
     RotationMatrix,
+    RollPitchYaw,
     PiecewisePolynomial,
     TrajectorySource,
 )
 from pydrake.multibody.math import SpatialVelocity
-from src.perception.light_and_dark import LightDarkRegionSystem
-from src.utils.config_loader import load_rrbt_config
+from src.perception.light_and_dark import BinLightDarkRegionSensorSystem
+from src.utils.config_loader import load_config
 from src.planning.standard_rrt import rrt_planning
 from src.simulation.simulation_tools import IiwaProblem
 from src.utils.ik_solver import solve_ik_for_pose
@@ -1468,11 +1469,11 @@ def main():
     print("=" * 60)
 
     # Load configuration
-    config = load_rrbt_config()
+    config = load_config()
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
     print(
-        f"    > Planner: MaxUncert={config.planner.max_uncertainty}, LightBias={config.planner.prob_sample_light}"
+        f"    > Planner: MaxUncert={config.planner.max_bin_uncertainty}, LightBias={config.planner.bias_prob_sample_q_bin_light}"
     )
     print()
 
@@ -1533,32 +1534,24 @@ def main():
     
     q_home = config.simulation.q_home
     
-    # Compute what the config q_goal corresponds to in world frame
-    # This helps us understand what transform to use
+    # Get goal transform from config (tf_goal with translation and rpy)
     print("\n" + "=" * 60)
-    print("COMPUTING CONFIG Q_GOAL WORLD TRANSFORM")
-    print("=" * 60)
-    temp_builder_for_config = DiagramBuilder()
-    temp_station_for_config = temp_builder_for_config.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=None))
-    temp_diagram_for_config = temp_builder_for_config.Build()
-    temp_context_for_config = temp_diagram_for_config.CreateDefaultContext()
-    temp_plant_for_config = temp_station_for_config.GetSubsystemByName("plant")
-    
-    config_q_goal = np.array(config.simulation.q_goal)
-    temp_plant_context_for_config = temp_plant_for_config.CreateDefaultContext()
-    iiwa_model_for_config = temp_plant_for_config.GetModelInstanceByName("iiwa")
-    temp_plant_for_config.SetPositions(temp_plant_context_for_config, iiwa_model_for_config, config_q_goal)
-    wsg_body_for_config = temp_plant_for_config.GetBodyByName("body", temp_plant_for_config.GetModelInstanceByName("wsg"))
-    X_WG_config_goal = temp_plant_for_config.EvalBodyPoseInWorld(temp_plant_context_for_config, wsg_body_for_config)
-    
-    print(f"Config q_goal: {config_q_goal}")
-    print(f"Corresponding world transform:")
-    print(f"  Position (x, y, z): {X_WG_config_goal.translation()}")
-    print(f"  Rotation matrix:\n{X_WG_config_goal.rotation().matrix()}")
+    print("GOAL TRANSFORM FROM CONFIG")
     print("=" * 60)
     
-    # Clean up
-    del temp_builder_for_config, temp_station_for_config, temp_diagram_for_config, temp_context_for_config, temp_plant_for_config
+    tf_goal = config.simulation.tf_goal
+    goal_translation = np.array(tf_goal.translation)
+    goal_rpy = np.array(tf_goal.rpy)  # [roll, pitch, yaw] in radians
+    
+    # Construct goal transform from config
+    goal_rotation = RotationMatrix(RollPitchYaw(goal_rpy[0], goal_rpy[1], goal_rpy[2]))
+    X_WG_config_goal = RigidTransform(goal_rotation, goal_translation)
+    
+    print(f"Config tf_goal:")
+    print(f"  Translation (x, y, z): {goal_translation}")
+    print(f"  RPY (roll, pitch, yaw): {goal_rpy} rad")
+    print(f"  Rotation matrix:\n{goal_rotation.matrix()}")
+    print("=" * 60)
     
     if USE_TRANSFORM_GOAL:
         # ====== Define goal as a world-frame transform ======
@@ -1634,22 +1627,50 @@ def main():
             
         except RuntimeError as e:
             print(f"✗ IK Failed: {e}")
-            print("  Falling back to config q_goal")
+            print("  Falling back to q_home (no motion)")
             print(f"  This usually means the target pose is unreachable or the IK solver")
             print(f"  couldn't find a solution. Try adjusting the goal position or rotation.")
-            q_goal = config.simulation.q_goal
+            q_goal = q_home  # Fallback to home position
             X_WG_desired = None  # No desired pose to visualize
         
         # Clean up temporary resources
         del temp_builder, temp_station, temp_diagram, temp_context, temp_plant
         
     else:
-        # ====== Use joint angles from config ======
-        q_goal = config.simulation.q_goal
-        X_WG_desired = None  # No desired transform when using config
+        # ====== USE_TRANSFORM_GOAL is False - still use tf_goal but skip offset ======
+        # Config now only has tf_goal (transform), not q_goal (joint angles)
+        # So we solve IK directly from tf_goal without any offset
+        
+        temp_builder = DiagramBuilder()
+        temp_station = temp_builder.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=None))
+        temp_diagram = temp_builder.Build()
+        temp_context = temp_diagram.CreateDefaultContext()
+        temp_plant = temp_station.GetSubsystemByName("plant")
+        
         print("\n" + "=" * 60)
-        print("GOAL POSE (Joint Angles from Config)")
+        print("GOAL POSE (from config tf_goal, no offset)")
         print("=" * 60)
+        print(f"  Target position: {X_WG_config_goal.translation()}")
+        print(f"  Target rotation:\n{X_WG_config_goal.rotation().matrix()}")
+        
+        try:
+            q_goal = solve_ik_for_pose(
+                plant=temp_plant,
+                X_WG_target=X_WG_config_goal,
+                q_nominal=tuple(q_home),
+                theta_bound=0.05,
+                pos_tol=0.01,
+            )
+            print(f"✓ IK Success!")
+            print(f"  q_goal: {np.round(q_goal, 3)}")
+            X_WG_desired = X_WG_config_goal
+        except RuntimeError as e:
+            print(f"✗ IK Failed: {e}")
+            print("  Falling back to q_home (no motion)")
+            q_goal = q_home
+            X_WG_desired = None
+        
+        del temp_builder, temp_station, temp_diagram, temp_context, temp_plant
     
     print("=" * 60)
 
@@ -1702,12 +1723,12 @@ def main():
 
     # ====== Perception system ======
     perception_sys = builder.AddSystem(
-        LightDarkRegionSystem(
+        BinLightDarkRegionSensorSystem(
             plant=plant,
-            light_region_center=config.simulation.light_center,
-            light_region_size=config.simulation.light_size,
-            sigma_light=np.sqrt(float(config.physics.meas_noise_light)),
-            sigma_dark=np.sqrt(float(config.physics.meas_noise_dark)),
+            light_region_center=config.simulation.bin_light_center,
+            light_region_size=config.simulation.bin_light_size,
+            tpr_light=float(config.physics.tpr_light),
+            fpr_light=float(config.physics.fpr_light),
         )
     )
 
@@ -1784,12 +1805,12 @@ def main():
     # Visualize light region indicator
     meshcat.SetObject(
         "light_region_indicator",
-        Box(*config.simulation.light_size),
+        Box(*config.simulation.bin_light_size),
         Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
     )
     meshcat.SetTransform(
         "light_region_indicator",
-        RigidTransform(RotationMatrix(), config.simulation.light_center),
+        RigidTransform(RotationMatrix(), config.simulation.bin_light_center),
     )
 
     # Visualize goal pose
@@ -1949,8 +1970,8 @@ def main():
     print("=" * 60)
     print(f"  Home position: {q_home}")
     print(f"  Goal position: {q_goal}")
-    print(f"  Light region center: {config.simulation.light_center}")
-    print(f"  Light region size: {config.simulation.light_size}")
+    print(f"  Light region center: {config.simulation.bin_light_center}")
+    print(f"  Light region size: {config.simulation.bin_light_size}")
     print(f"  Voxel grid: {voxel_grid.dimensions} @ {voxel_grid.voxel_size}m resolution")
     print(f"  Observation mode: DEPTH-BASED (realistic)")
     print(f"  Surface thickness: {SURFACE_THICKNESS:.3f}m")

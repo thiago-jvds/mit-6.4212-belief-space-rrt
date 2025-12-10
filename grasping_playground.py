@@ -1072,36 +1072,36 @@ def main():
     print("\n" + "-" * 40)
     print("Phase 0: Randomizing mustard bottle position above bin0...")
     print("-" * 40)
-    
+
     # Get bin0's pose in world frame
     bin0_instance = plant.GetModelInstanceByName("bin0")
     bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
     X_WB = plant.EvalBodyPoseInWorld(plant_context, bin0_body)
-    
+
     # Generate random position and orientation for mustard bottle
     generator = RandomGenerator(rng.integers(1000))  # C++ random generator
     # random_rotation = UniformlyRandomRotationMatrix(generator)
-    
+
     # generate random value from 0 to 2pi for the rotation around the z
     random_rotation = RollPitchYaw(-np.pi/2, 0, np.random.uniform(0, 2*np.pi)).ToRotationMatrix()
-    
+
     # Random XY position within bin bounds, Z height above bin
     x_offset = -0.01
     x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
     y_range = (-0.15, 0.15)  # min, max for y offset from bin center
     random_z = 0.2  # Height above bin
-    
+
     random_x = rng.uniform(x_range[0], x_range[1])
     random_y = rng.uniform(y_range[0], y_range[1])
-    
+
     # Visualize the random initialization space as a translucent green box
     box_width = x_range[1] - x_range[0]   # 0.2m
     box_depth = y_range[1] - y_range[0]   # 0.2m
     box_height = 0.02  # Thin box to show the XY region at the drop height
-    
+
     init_space_box = Box(box_width, box_depth, box_height)
     meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
-    
+
     # Position the box at the center of the initialization region (relative to bin)
     box_center_in_bin = [
         (x_range[0] + x_range[1]) / 2,  # Center x = 0
@@ -1110,17 +1110,17 @@ def main():
     ]
     X_WBox = X_WB.multiply(RigidTransform(box_center_in_bin))
     meshcat.SetTransform("init_space", X_WBox)
-    
+
     print(f"  Initialization space: x=[{x_range[0]}, {x_range[1]}], y=[{y_range[0]}, {y_range[1]}], z={random_z}")
-    
+
     # Create transform relative to bin, then convert to world frame
     X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
     X_WM = X_WB.multiply(X_BM)
-    
+
     # Set mustard bottle pose
     mustard_body = plant.GetBodyByName("base_link_mustard")
     plant.SetFreeBodyPose(plant_context, mustard_body, X_WM)
-    
+
     print(f"  Bin0 position: {X_WB.translation()}")
     print(f"  Mustard random offset: [{random_x:.3f}, {random_y:.3f}, {random_z:.3f}]")
     print(f"  Mustard world position: {X_WM.translation()}")
@@ -1142,13 +1142,13 @@ def main():
     print("\n" + "-" * 40)
     print("Phase 2: Capturing point clouds from fixed cameras...")
     print("-" * 40)
-    
+
     # Force publish to update visualization
     diagram.ForcedPublish(context)
-    
+
     # Camera names from two_bins_w_cameras.dmd.yaml
     camera_names = ["camera0", "camera1", "camera2"]
-    
+
     # Get point clouds from all 3 cameras
     point_clouds = []
     for cam_name in camera_names:
@@ -1165,7 +1165,7 @@ def main():
             meshcat.SetObject(f"pcl_{cam_name}_raw", pcl)
         except Exception as e:
             print(f"  ⚠ Could not get {cam_name} point cloud: {e}")
-    
+
     # Fuse all point clouds using Drake's Concatenate
     if len(point_clouds) > 0:
         fused_pcl = Concatenate(point_clouds)
@@ -1180,49 +1180,18 @@ def main():
         print("  ⚠ No point clouds captured!")
         scene_xyzs = np.array([[], [], []])
         scene_rgbs = np.array([[], [], []])
-    
+
     # Get RGB and depth images from cameras for visualization
     print("\n  Getting RGB and depth images from cameras...")
-    
-    # Store images from first two cameras for visualization
-    camera_images = {}
-    for i, cam_name in enumerate(camera_names[:2]):  # Just first 2 cameras for plots
-        try:
-            rgb_port = diagram.GetOutputPort(f"{cam_name}.rgb_image")
-            depth_port = diagram.GetOutputPort(f"{cam_name}.depth_image")
-            
-            rgb_obj = rgb_port.Eval(context)
-            depth_obj = depth_port.Eval(context)
-            
-            rgb_image = np.array(rgb_obj.data, copy=True)
-            depth_image = np.array(depth_obj.data, copy=True)
-            
-            if rgb_image.ndim == 1:
-                rgb_image = rgb_image.reshape(rgb_obj.height(), rgb_obj.width(), -1)
-            if depth_image.ndim == 1:
-                depth_image = depth_image.reshape(depth_obj.height(), depth_obj.width())
-            elif depth_image.ndim == 3:
-                depth_image = depth_image.squeeze()
-            
-            yellow_mask = create_yellow_mask_from_rgb(rgb_image)
-            
-            camera_images[cam_name] = {
-                'rgb': rgb_image,
-                'depth': depth_image,
-                'mask': yellow_mask
-            }
-            print(f"  {cam_name} - RGB: {rgb_image.shape}, Yellow: {np.sum(yellow_mask)} pixels")
-        except Exception as e:
-            print(f"  ⚠ Could not get {cam_name} images: {e}")
-    
+
     # Segment by yellow color on the FUSED point cloud
     print("\n" + "-" * 40)
     print("Phase 3: Segmenting yellow points (mustard bottle) from fused point cloud...")
     print("-" * 40)
-    
+
     segmented_xyz, segmented_rgb = segment_by_yellow(scene_xyzs, scene_rgbs)
     print(f"  Found {segmented_xyz.shape[1]} yellow points in fused cloud (before Z filter)")
-    
+
     # Filter out points at or below bin floor level (removes depth bleeding artifacts)
     min_z_threshold = 0.005  # Filter points below this Z height
     above_floor_mask = segmented_xyz[2, :] > min_z_threshold
@@ -1236,7 +1205,7 @@ def main():
     print("-" * 40)
     print(f"  Matplotlib backend: {matplotlib.get_backend()}")
     print(f"  DISPLAY env var: {os.environ.get('DISPLAY', 'Not set')}")
-    
+
     for cam_name, images in camera_images.items():
         plot_segmentation_results(
             images['rgb'], images['depth'], images['mask'], 
@@ -1244,7 +1213,7 @@ def main():
             title_prefix=f"{cam_name.upper()} - "
         )
         print(f"  Saved {cam_name} segmentation to segmentation_results_{cam_name}.png")
-    
+
     if segmented_xyz.shape[1] > 0:
         # Visualize segmented point cloud in green
         meshcat.SetObject(

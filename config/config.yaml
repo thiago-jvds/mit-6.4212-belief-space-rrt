@@ -1,11 +1,13 @@
 simulation:
-  light_center: [ 0.0, 1.0, 0.5 ]
-  light_size: [ 0.25, 0.25, 0.25 ]
+  bin_light_center: [ 0.5, 0.5, 0.5 ]
+  bin_light_size: [ 0.25, 0.25, 0.25 ]
+  mustard_position_light_center: [ -0.5, -0.5, 0.5 ]
+  mustard_position_light_size: [ 0.25, 0.25, 0.25 ]
   q_home: [ 0, 0.1, 0, -1.2, 0, 1.6, 0 ]
   # Goal specified as end-effector pose in world frame
   # Much easier to reason about than 7D joint configuration
   tf_goal:
-    translation: [ 0.75, 0.0, 0.4 ]   # [x, y, z] position in meters
+    translation: [ 0.75, 0.0, 0.75 ]   # [x, y, z] position in meters
     rpy: [ 0.0, 3.14159, -1.5708 ]   # [roll, pitch, yaw] Euler angles in radians (X-Y-Z)
 
 physics:
@@ -19,35 +21,49 @@ physics:
   fpr_light: 0.15   # False Positive Rate: P(detected | object absent)
   # Dark region: Uninformative sensor (TPR=FPR=0.5, hardcoded)
 
+  # Sensor Noise:
+  # Light: High precision (info gain). Dark: Blind.
+  meas_noise_light: 0.01
+  meas_noise_dark: 1e+9
+
   # Keep buffer to avoid hitting the bottle while exploring
   safety_buffer_radius: 0.08
 
 planner:
-  max_iterations: 1000
+  max_iterations: 250
 
-  # Bucket configuration for discrete Bayes filter
-  n_buckets: 3       # Number of discrete hypotheses
-  true_bucket: 0     # Ground truth bucket index for simulation (bucket A)
+  # bin configuration for discrete Bayes filter
+  true_bin: 0     # Ground truth bin index for simulation (bin A)
 
   # GOAL CONDITION: We cannot finish unless we are confident.
   # Threshold for misclassification_risk = 1 - max(belief)
-  max_uncertainty: 0.01
+  max_bin_uncertainty: 0.05
 
   # COST FUNCTION: cost = path_length + lambda_weight × misclassification_risk
   # - Small lambda (0.1-1): Prioritize shorter paths
   # - Medium lambda (1-10): Balanced
   # - Large lambda (100+): Prioritize uncertainty reduction
-  lambda_weight: 0.1
+  bin_lambda_weight: 0.1
 
   # Biases
-  prob_sample_goal: 0.5
-  prob_sample_light: 0.5
+  bias_prob_sample_q_bin_light: 0.5
+  bias_prob_sample_q_goal: 0.5
+
+  # Mustard position RRBT (second stage)
+  # After ICP gives us an estimate, we add artificial uncertainty
+  # and plan a path to the mustard position light region to reduce it
+  mustard_position_initial_uncertainty: 0.005  # Initial 3D covariance diagonal (0.01 = ~10cm std dev)
+  mustard_position_max_uncertainty: 0.001    # Termination threshold for trace(Σ)
+  mustard_position_lambda_weight: 1.0
+  mustard_position_max_iterations: 100
+  bias_prob_sample_q_mustard_position_light: 0.5
+
 
 # Visualization settings
 visualization:
   # Camera pose for Meshcat viewport
-  camera_position: [ -0.66052837, -0.68944092, 1.09457347 ]
-  camera_target: [ 0.3, 0.3, 0.0 ]
+  camera_position: [ 1.0, -1.0, 1.5 ]
+  camera_target: [ 0.0, 0.0, 0.0 ]
   
   # Belief bar chart position in world frame
   chart_position: [ -0.3, 0.5, 0.8 ]

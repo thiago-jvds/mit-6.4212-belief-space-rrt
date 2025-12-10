@@ -1,5 +1,8 @@
 directives:
 # 1. Add the Kuka iiwa robot
+- add_directives:
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/two_bins_w_cameras.dmd.yaml
+
 - add_model:
     name: iiwa
     file: package://drake_models/iiwa_description/urdf/iiwa14_primitive_collision.urdf
@@ -18,6 +21,7 @@ directives:
     child: iiwa::iiwa_link_0
     X_PC:
       translation: [ 0.0, 0.0, 0.0 ]
+      rotation: !Rpy { deg: [ 0, 0, 0 ] }
 
 # 3. Add the WSG Gripper
 - add_model:
@@ -32,90 +36,59 @@ directives:
       translation: [ 0, 0, 0.09 ]
       rotation: !Rpy { deg: [ 90, 0, 90 ] }
 
-# 5. Add the Floor
 - add_model:
-    name: floor
-    file: package://manipulation/floor.sdf
-
-- add_weld:
-    parent: world
-    child: floor::box
-    X_PC:
-      translation: [ 0, 0, -0.1 ]  # Floor top surface at z=-0.05 (below robot base)
-
-# 6. Add the Manipulation Bin
-- add_model:
-    name: bin
-    file: package://drake_models/manipulation_station/bin.sdf
-
-- add_weld:
-    parent: world
-    child: bin::bin_base
-    X_PC:
-      translation: [ 0.0, -0.7, 0.0 ]  # On the opposite side of robot from table
-      rotation: !Rpy { deg: [ 0, 0, 90 ] }
-
-# 6b. Add a Second Manipulation Bin
-- add_model:
-    name: bin2
-    file: package://drake_models/manipulation_station/bin.sdf
-
-- add_weld:
-    parent: world
-    child: bin2::bin_base
-    X_PC:
-      translation: [ 0.7, 0.0, 0.0 ]
-      rotation: !Rpy { deg: [ 0, 0, -180 ] }
-
-# 7. Add the Bookshelf
-- add_model:
-    name: shelves
-    file: package://manipulation/shelves.sdf
-
-- add_weld:
-    parent: world
-    child: shelves::shelves_body
-    X_PC:
-      # translation: [ 0.5, 0, 0.3995 ]
-      translation: [ 3.0, 0, 0.3995 ]
-      # translation: [ 10.0, 10.0, 0.3995 ]
-      rotation: !Rpy { deg: [ 0, 0, 180 ] }
-
-# 8. Add the Target Object
-# We place it on the shelf
-- add_model:
-    name: target_object
+    name: mustard
     file: package://drake_models/ycb/006_mustard_bottle.sdf
+    default_free_body_pose:
+      base_link_mustard:
+        translation: [ 10.0, 10.0, 10.0 ]
+        rotation: !Rpy { deg: [ 0, 0, 0 ] }
+
+# 5. Add square bin (0.49m x 0.49m) centered between the two rectangular bins
+- add_model:
+    name: square_bin
+    file: file:///workspaces/mit-6.4212-belief-space-rrt/config/square_bin.sdf
 
 - add_weld:
-    parent: shelves::shelves_body
-    child: target_object::base_link_mustard
+    parent: world
+    child: square_bin::bin_base
     X_PC:
-      translation: [ 0.1, 0, 0 ]
-      rotation: !Rpy { deg: [ -90, 0, -90 ] }
+      translation: [ 0.5, -0.5, -0.015 ]
+      rotation: !Rpy { deg: [ 0, 0, 0 ] }
 
-# 9. Add the Camera (Physical Body)
-# We weld a camera box to the top of last link 
-# so it moves with the hand
-# - add_model:
-#     name: wrist_camera
-#     file: package://manipulation/camera_box.sdf
-
-# - add_weld:
-#     parent: iiwa::iiwa_link_7
-#     child: wrist_camera::base
-#     X_PC:
-#       translation: [ -0.095, 0, 0 ] # Mounted slightly "above" the gripper (in gripper frame)
-#       rotation: !Rpy { deg: [ -180, 180, 90 ] } # Looking forward
-
-# # 11. Define the Sensors
-# # This tells Drake to render images from the camera body we just added
-# cameras:
-#   wrist_camera_sensor:
-#     name: wrist_camera_sensor
-#     # depth: true
-#     X_PB:
-#       base_frame: wrist_camera::base
+# Define RGBD sensors for all 6 cameras from two_bins_w_cameras.dmd.yaml
+# Cameras 0-2 are around bin0, cameras 3-5 are around bin1
+cameras:
+  camera0:
+    name: camera0
+    depth: true
+    X_PB:
+      base_frame: camera0::base
+  camera1:
+    name: camera1
+    depth: true
+    X_PB:
+      base_frame: camera1::base
+  camera2:
+    name: camera2
+    depth: true
+    X_PB:
+      base_frame: camera2::base
+  camera3:
+    name: camera3
+    depth: true
+    X_PB:
+      base_frame: camera3::base
+  camera4:
+    name: camera4
+    depth: true
+    X_PB:
+      base_frame: camera4::base
+  camera5:
+    name: camera5
+    depth: true
+    X_PB:
+      base_frame: camera5::base
 
 model_drivers:
   iiwa: !IiwaDriver

@@ -5,7 +5,7 @@ This module implements a simple discrete Bayes filter for categorical
 hypothesis testing with a binary sensor model (TPR/FPR).
 
 The belief state is a probability vector [P(A), P(B), P(C)] representing
-the probability that the object is in each of the 3 buckets.
+the probability that the object is in each of the 3 bins.
 
 Sensor Model:
 - TPR (True Positive Rate): P(detected | object present)
@@ -38,20 +38,20 @@ def calculate_misclassification_risk(belief: np.ndarray) -> float:
 
 def bayes_update_single(
     belief: np.ndarray,
-    measured_bucket: int,
+    measured_bin: int,
     observation: bool,
     tpr: float,
     fpr: float,
 ) -> np.ndarray:
     """
-    Update belief after measuring ONE bucket with a binary sensor.
+    Update belief after measuring ONE bin with a binary sensor.
     
     Applies Bayes' rule:
         posterior(x) ∝ likelihood(z|x) × prior(x)
     
     Args:
         belief: Current belief vector [P(A), P(B), P(C)]
-        measured_bucket: Index of the bucket being measured (0, 1, or 2)
+        measured_bin: Index of the bin being measured (0, 1, or 2)
         observation: True if detection, False if no detection
         tpr: True Positive Rate P(detected | object present)
         fpr: False Positive Rate P(detected | object absent)
@@ -59,19 +59,19 @@ def bayes_update_single(
     Returns:
         Normalized posterior belief vector
     """
-    n_buckets = len(belief)
-    likelihood = np.zeros(n_buckets)
+    n_bins = len(belief)
+    likelihood = np.zeros(n_bins)
     
-    for hypothesis_idx in range(n_buckets):
-        if hypothesis_idx == measured_bucket:
-            # Hypothesis: object is in the bucket we just measured
+    for hypothesis_idx in range(n_bins):
+        if hypothesis_idx == measured_bin:
+            # Hypothesis: object is in the bin we just measured
             # P(observation | object here)
             if observation:
                 likelihood[hypothesis_idx] = tpr  # True positive
             else:
                 likelihood[hypothesis_idx] = 1 - tpr  # False negative
         else:
-            # Hypothesis: object is in a DIFFERENT bucket
+            # Hypothesis: object is in a DIFFERENT bin
             # P(observation | object NOT here)
             if observation:
                 likelihood[hypothesis_idx] = fpr  # False positive
@@ -85,91 +85,97 @@ def bayes_update_single(
     return posterior
 
 
-def bayes_update_all_buckets(
+def bayes_update_all_bins(
     belief: np.ndarray,
-    true_bucket: int,
+    true_bin: int,
     tpr: float,
     fpr: float,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
-    Measure ALL buckets and update belief sequentially.
+    Measure ALL bins and update belief sequentially.
     
     Used during EXECUTION when robot is in the light region.
-    Each bucket is measured once, and observations are simulated
-    based on the true_bucket (ground truth).
+    Each bin is measured once, and observations are simulated
+    based on the true_bin (ground truth).
     
     Args:
         belief: Current belief vector [P(A), P(B), P(C)]
-        true_bucket: Index of bucket where object actually is (ground truth)
+        true_bin: Index of bin where object actually is (ground truth)
         tpr: True Positive Rate
         fpr: False Positive Rate
+        rng: NumPy random generator for reproducibility (optional)
         
     Returns:
-        Updated belief after measuring all buckets
+        Updated belief after measuring all bins
     """
-    n_buckets = len(belief)
+    # Use provided rng or create default
+    if rng is None:
+        rng = np.random.default_rng()
+    
+    n_bins = len(belief)
     updated_belief = belief.copy()
     
-    for bucket_idx in range(n_buckets):
-        # Simulate observation for this bucket based on ground truth
-        is_object_here = (bucket_idx == true_bucket)
+    for bin_idx in range(n_bins):
+        # Simulate observation for this bin based on ground truth
+        is_object_here = (bin_idx == true_bin)
         
         if is_object_here:
-            # Object is in this bucket: detection with probability TPR
-            observation = np.random.rand() < tpr
+            # Object is in this bin: detection with probability TPR
+            observation = rng.random() < tpr
         else:
-            # Object not in this bucket: false alarm with probability FPR
-            observation = np.random.rand() < fpr
+            # Object not in this bin: false alarm with probability FPR
+            observation = rng.random() < fpr
         
         # Update belief with this measurement
         updated_belief = bayes_update_single(
-            updated_belief, bucket_idx, observation, tpr, fpr
+            updated_belief, bin_idx, observation, tpr, fpr
         )
     
     return updated_belief
 
 
-def expected_posterior_all_buckets(
+def expected_posterior_all_bins(
     belief: np.ndarray,
     tpr: float,
     fpr: float,
-    assumed_bucket: int = 0,
+    assumed_bin: int = 0,
 ) -> np.ndarray:
     """
-    Compute EXPECTED posterior after measuring all buckets, assuming the
-    object is in a specific bucket.
+    Compute EXPECTED posterior after measuring all bins, assuming the
+    object is in a specific bin.
     
-    Used during PLANNING. We assume the object is in `assumed_bucket` and
+    Used during PLANNING. We assume the object is in `assumed_bin` and
     compute the expected posterior given that assumption. This allows the
     planner to reason about information gain - if we go to the light region,
-    the expected belief will converge toward certainty about `assumed_bucket`.
+    the expected belief will converge toward certainty about `assumed_bin`.
     
-    For each bucket measurement:
-    - If measuring the assumed_bucket: expect observation=True with prob TPR
-    - If measuring other buckets: expect observation=True with prob FPR
+    For each bin measurement:
+    - If measuring the assumed_bin: expect observation=True with prob TPR
+    - If measuring other bins: expect observation=True with prob FPR
     
     Args:
         belief: Current belief vector [P(A), P(B), P(C)]
         tpr: True Positive Rate
         fpr: False Positive Rate
-        assumed_bucket: Which bucket to assume the object is in (for planning)
+        assumed_bin: Which bin to assume the object is in (for planning)
         
     Returns:
-        Expected posterior after measuring all buckets
+        Expected posterior after measuring all bins
     """
-    n_buckets = len(belief)
+    n_bins = len(belief)
     expected_belief = belief.copy()
     
-    for measured_bucket in range(n_buckets):
-        # Determine if this is the bucket where we assume the object is
-        is_assumed_bucket = (measured_bucket == assumed_bucket)
+    for measured_bin in range(n_bins):
+        # Determine if this is the bin where we assume the object is
+        is_assumed_bin = (measured_bin == assumed_bin)
         
-        if is_assumed_bucket:
-            # We're measuring the bucket where (we assume) the object is
+        if is_assumed_bin:
+            # We're measuring the bin where (we assume) the object is
             # Expect positive observation with probability TPR
             p_obs_positive = tpr
         else:
-            # We're measuring a bucket where (we assume) the object is NOT
+            # We're measuring a bin where (we assume) the object is NOT
             # Expect positive observation with probability FPR (false alarm)
             p_obs_positive = fpr
         
@@ -177,10 +183,10 @@ def expected_posterior_all_buckets(
         
         # Compute posterior for each observation outcome
         posterior_if_positive = bayes_update_single(
-            expected_belief, measured_bucket, True, tpr, fpr
+            expected_belief, measured_bin, True, tpr, fpr
         )
         posterior_if_negative = bayes_update_single(
-            expected_belief, measured_bucket, False, tpr, fpr
+            expected_belief, measured_bin, False, tpr, fpr
         )
         
         # Expected posterior (weighted average given our assumption)

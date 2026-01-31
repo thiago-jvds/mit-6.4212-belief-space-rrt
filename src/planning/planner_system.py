@@ -1,16 +1,4 @@
-"""
-Planner System - A Drake LeafSystem for sequential RRBT planning stages.
-
-This system implements a state machine that:
-1. Initially outputs q_home while waiting for configuration
-2. Runs RRBT planning (blocking) for bin belief information gathering
-3. Executes the RRBT trajectory
-4. Runs pose estimation from point clouds (ICP)
-5. Runs RRBT2 planning (blocking) for mustard position uncertainty reduction
-6. Executes the RRBT2 trajectory (ellipsoid shrinks as robot enters light region)
-7. Runs grasp planning (samples from covariance, selects best grasp, computes pre-grasp)
-8. Holds at the final position when complete
-"""
+"""Drake LeafSystem implementing RRBT planning state machine for bin belief and grasp execution."""
 
 from enum import Enum, auto
 import numpy as np
@@ -61,55 +49,18 @@ class PlannerState(Enum):
 
 
 def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewisePolynomial:
-    """
-    Convert a list of joint configurations to a time-parameterized trajectory.
-    
-    Args:
-        path: List of joint configurations (each is a 7-element array/tuple)
-        time_per_segment: Time allocated per path segment in seconds
-        
-    Returns:
-        PiecewisePolynomial trajectory (7D output matching iiwa.position port)
-    """
-    # Convert path to numpy array (n_points x 7)
+    """Convert joint configurations to a time-parameterized trajectory."""
     path_array = np.array([np.array(q) for q in path])
-    
-    # Create time breakpoints
     n_points = len(path)
     times = np.linspace(0, (n_points - 1) * time_per_segment, n_points)
-    
-    # Create trajectory using first-order hold (linear interpolation)
-    # PiecewisePolynomial.FirstOrderHold expects:
-    # - breaks: 1D array of times
-    # - samples: 2D array where each column is a sample (7 x n_points)
     trajectory = PiecewisePolynomial.FirstOrderHold(times, path_array.T)
-    
     return trajectory
 
 
 class PlannerSystem(LeafSystem):
-    """
-    A Drake LeafSystem that performs sequential RRBT planning.
-    
-    State Machine:
-        IDLE -> RRBT_PLANNING -> RRBT_EXECUTING -> POSE_ESTIMATION -> 
-        RRBT2_PLANNING -> RRBT2_EXECUTING -> COMPLETE
-    
-    Outputs:
-        - iiwa_position_command: 7D joint position command
-    """
+    """Drake LeafSystem for sequential RRBT planning and grasp execution."""
     
     def __init__(self, plant, config, meshcat, scenario_path, rng=None):
-        """
-        Initialize the PlannerSystem.
-        
-        Args:
-            plant: MultibodyPlant reference (for IK solving)
-            config: RRBT configuration namespace (from load_rrbt_config)
-            meshcat: Meshcat visualizer instance
-            scenario_path: Path to scenario.yaml file
-            rng: NumPy random generator for reproducibility (optional)
-        """
         LeafSystem.__init__(self)
         
         # Configuration
@@ -207,17 +158,7 @@ class PlannerSystem(LeafSystem):
         print(f"  q_mustard_position_light_hint: {self._q_mustard_position_light_hint}")
     
     def configure_for_execution(self, true_bin, X_WM_mustard=None):
-        """
-        Configure the planner for execution after mustard bottle is placed.
-        
-        This method must be called after the diagram is built and the mustard
-        bottle has been positioned. It transitions the state machine from IDLE
-        to RRBT_PLANNING.
-        
-        Args:
-            true_bin: The ground truth bin index (0 or 1)
-            X_WM_mustard: RigidTransform of mustard bottle in world frame (optional)
-        """
+        """Configure planner with ground truth and start planning."""
         self._true_bin = true_bin
         self._X_WM_mustard = X_WM_mustard
         self._state = PlannerState.RRBT_PLANNING
@@ -348,12 +289,6 @@ class PlannerSystem(LeafSystem):
             # Execute grasp trajectory
             t_traj = t - self._grasp_start_time
             
-            # Update gripper command based on trajectory phase
-            # Order matters: check open time first (it comes after close time)
-            # Note: WSG gripper position command is the gap between fingers in meters
-            #   - 0.1m (100mm) = fully open
-            #   - 0.0m = fully closed (but this can cause slipping)
-            #   - ~0.02m works well for grasping cylindrical objects like mustard bottle
             if self._grasp_open_time is not None and t_traj >= self._grasp_open_time:
                 self._gripper_command = 0.1  # Open gripper (release object)
             elif t_traj >= self._grasp_close_time:
@@ -427,39 +362,19 @@ class PlannerSystem(LeafSystem):
         self._update_gripper_triad(q_command)
     
     def CalcGripperCommand(self, context, output):
-        """
-        Calculate the gripper position command.
-        
-        The gripper stays open (0.1m) during motion and closes (0.0m) 
-        during the grasp hold phase.
-        """
+        """Calculate gripper position command."""
         output.SetFromVector([self._gripper_command])
     
     def _update_gripper_triad(self, q_iiwa):
-        """
-        Update the Meshcat gripper triad visualization using forward kinematics.
-        
-        Args:
-            q_iiwa: 7-element array of iiwa joint positions
-        """
-        # Set iiwa positions in the FK context
+        """Update Meshcat gripper triad via forward kinematics."""
         iiwa_model = self._plant.GetModelInstanceByName("iiwa")
         self._plant.SetPositions(self._fk_plant_context, iiwa_model, q_iiwa)
         
-        # Get gripper pose via forward kinematics
         X_WG = self._plant.EvalBodyPoseInWorld(self._fk_plant_context, self._gripper_body)
-        
-        # Update Meshcat triad
         self._meshcat.SetTransform("gripper_frame", X_WG)
     
     def _compute_ik_targets(self):
-        """
-        Compute q_goal, q_bin_light_hint, and q_mustard_position_light_hint via IK.
-        
-        Uses the tf_goal, bin_light_center, and mustard_position_light_center from
-        config to solve IK for the corresponding joint configurations.
-        """
-        # Compute q_goal from tf_goal
+        """Compute q_goal and light region hints via IK."""
         tf_goal = self._config.simulation.tf_goal
         X_WG_goal = RigidTransform(
             RollPitchYaw(tf_goal.rpy).ToRotationMatrix(),
@@ -538,12 +453,7 @@ class PlannerSystem(LeafSystem):
         # print(f"  Added triad at mustard_position_light_center: {mustard_position_light_center}")
     
     def _run_rrbt_planning(self):
-        """
-        Execute RRBT planning for bin belief information gathering.
-        
-        Creates an IiwaProblemBinBelief and runs RRBT planning.
-        Populates _rrbt_trajectory and _pred_q_goal.
-        """
+        """Execute RRBT planning for bin belief. Populates _rrbt_trajectory."""
         print(f"Creating RRBT problem (bin belief)...")
         print(f"  q_start: {self._q_home}")
         print(f"  q_goal: {self._q_goal}")
@@ -592,15 +502,7 @@ class PlannerSystem(LeafSystem):
             self._pred_q_goal = self._q_goal  # Fallback to original goal
     
     def _run_rrbt2_planning(self):
-        """
-        Execute RRBT2 planning for mustard position uncertainty reduction.
-        
-        Creates an IiwaProblemMustardPositionBelief and runs RRBT planning.
-        The goal is to reduce 3D position uncertainty by moving to the
-        mustard position light region.
-        
-        Populates _rrbt2_trajectory.
-        """
+        """Execute RRBT2 planning for position uncertainty reduction."""
         print(f"Creating RRBT2 problem (position belief)...")
         print(f"  q_start: {np.round(self._rrbt_end_position, 3)}")
         print(f"  estimated_mustard_position: {np.round(self._estimated_mustard_position, 3)}")
@@ -656,40 +558,22 @@ class PlannerSystem(LeafSystem):
             self._rrbt2_trajectory = path_to_trajectory([tuple(self._rrbt_end_position)])
 
     def _run_grasp_planning(self, context):
-        """
-        Execute grasp planning after RRBT2 trajectory completion.
-        
-        This method:
-        1. Reads the final covariance from the Kalman filter
-        2. Samples a position from the covariance ellipsoid
-        3. Combines sampled position with ICP rotation to create candidate pose
-        4. Transforms mustard model to world frame at the sampled pose
-        5. Runs antipodal grasp selection
-        6. Computes pre-grasp pose
-        
-        Populates _best_grasp_pose and _pregrasp_pose.
-        """
+        """Sample from covariance, run grasp selection, populate candidates."""
         print(f"Starting grasp planning...")
         
-        # 1. Read covariance from input port (2x2 flattened to 4, X-Y only)
         covariance_flat = self._covariance_input_port.Eval(context)
         covariance_2x2 = covariance_flat.reshape(2, 2)
         
         print(f"  Final covariance trace (X-Y): {np.trace(covariance_2x2):.6f}")
         print(f"  Covariance diagonal (X-Y): {np.diag(covariance_2x2)}")
         
-        # 2. Sample position from truncated 2D Gaussian (X-Y only, Z fixed)
-        # Using max_sigma=0.5 for conservative sampling (very close to mean)
-        # Note: This is conservative because the Kalman filter covariance reduction
-        # doesn't seem to be working correctly during RRBT2 execution
         sampled_position = sample_position_from_covariance(
             mean=self._estimated_mustard_position,
             covariance=covariance_2x2,
             rng=self._rng,
-            max_sigma=0.2,  # Conservative: stay close to ICP estimate
+            max_sigma=0.2,
         )
         
-        # Compute offset from mean for logging (X-Y only since Z is fixed)
         offset_xy = sampled_position[:2] - self._estimated_mustard_position[:2]
         offset_norm = np.linalg.norm(offset_xy)
         
@@ -697,51 +581,36 @@ class PlannerSystem(LeafSystem):
         print(f"  Sampled position: {sampled_position} (Z fixed from ICP)")
         print(f"  X-Y offset from mean: {offset_xy} (norm: {offset_norm:.4f}m)")
         
-        # 3. Create candidate pose: sampled position + ICP rotation
         X_WM_sampled = RigidTransform(
             self._estimated_mustard_pose.rotation(),
             sampled_position
         )
         
-        # # Visualize the sampled pose
-        # AddMeshcatTriad(self._meshcat, "grasp_planning/sampled_pose", length=0.1, radius=0.003)
-        # self._meshcat.SetTransform("grasp_planning/sampled_pose", X_WM_sampled)
-        
-        # 4. Load mustard model and transform to world frame
         print(f"  Loading mustard model...")
         mustard_model = MustardPointCloud()
-        model_pcl = mustard_model.xyzs()  # (3, N) in model frame
-        
-        # Transform model to world frame at sampled pose
+        model_pcl = mustard_model.xyzs()
         model_world_xyz = X_WM_sampled @ model_pcl
         
         print(f"  Model point cloud: {model_pcl.shape[1]} points")
         
-        # 5. Create Drake PointCloud with normals for grasp selection
         grasp_cloud = PointCloud(
             model_world_xyz.shape[1],
             Fields(BaseField.kXYZs | BaseField.kNormals)
         )
         grasp_cloud.mutable_xyzs()[:] = model_world_xyz
-        
-        # Estimate normals on the model point cloud
         grasp_cloud.EstimateNormals(radius=0.05, num_closest=30)
-        
-        # Flip normals outward (away from centroid)
         centroid = np.mean(model_world_xyz, axis=1)
         grasp_cloud.FlipNormalsTowardPoint(centroid + np.array([0, 0, 1]))
         
         print(f"  Model cloud in world frame: {grasp_cloud.size()} points with normals")
         
-        # Visualize the grasp cloud
         self._meshcat.SetObject(
             "grasp_planning/grasp_cloud",
             grasp_cloud,
             point_size=0.003,
-            rgba=Rgba(0, 1, 1, 1)  # Cyan
+            rgba=Rgba(0, 1, 1, 1)
         )
         
-        # 6. Get grasp candidates (will be validated by IK in _compute_grasp_trajectory)
         print(f"  Running grasp selection...")
         self._grasp_candidates = select_best_grasp(
             meshcat=self._meshcat,
@@ -749,14 +618,13 @@ class PlannerSystem(LeafSystem):
             rng=self._rng,
             num_candidates=1000,
             num_to_draw=0,
-            num_to_return=20,  # Return top 20 for IK validation
+            num_to_return=20,
             debug=False,
         )
         
         if self._grasp_candidates:
             print(f"\n  Found {len(self._grasp_candidates)} grasp candidates for IK validation")
-            # Best grasp will be selected during IK validation in _compute_grasp_trajectory
-            self._best_grasp_pose = None  # Will be set after IK validation
+            self._best_grasp_pose = None
             self._pregrasp_pose = None
         else:
             print(f"\n  No valid grasp candidates found!")
@@ -765,30 +633,9 @@ class PlannerSystem(LeafSystem):
             self._pregrasp_pose = None
 
     def _compute_grasp_trajectory(self):
-        """
-        Compute the grasp execution trajectory.
-        
-        Iterates through grasp candidates and validates each with IK.
-        Uses the first candidate that passes all IK checks.
-        
-        Creates a trajectory through waypoints:
-        1. current position (end of RRBT2)
-        2. home position (safe intermediate waypoint if needed)
-        3. pregrasp pose (30cm above grasp)
-        4. grasp pose (at object)
-        5. grasp hold (same pose, gripper closes)
-        6. lift pose (grasp + 30cm in Z)
-        7. drop pose (above square bin)
-        
-        Timing is adjusted based on joint space distances.
-        
-        Sets:
-        - self._grasp_trajectory: PiecewisePolynomial trajectory
-        - self._grasp_close_time: time offset when gripper should close
-        """
+        """Validate grasp candidates with IK and build execution trajectory."""
         print(f"\nComputing grasp execution trajectory...")
         
-        # Current position (end of RRBT2)
         q_current = self._rrbt2_end_position
         print(f"  Current position: {np.round(q_current, 3)}")
         
@@ -796,7 +643,6 @@ class PlannerSystem(LeafSystem):
             print(f"  No grasp candidates to validate!")
             return False
         
-        # Iterate through grasp candidates and find first one that passes all IK checks
         print(f"\n  Validating {len(self._grasp_candidates)} grasp candidates with IK...")
         
         q_pregrasp = None
@@ -809,10 +655,8 @@ class PlannerSystem(LeafSystem):
         for candidate_idx, (cost, grasp_pose) in enumerate(self._grasp_candidates):
             print(f"\n  Candidate {candidate_idx + 1}/{len(self._grasp_candidates)} (cost={cost:.3f}):")
             
-            # Compute pregrasp pose for this candidate
             pregrasp_pose = compute_pregrasp_pose(grasp_pose, offset_z=0.3)
             
-            # Try IK for pregrasp
             try:
                 q_pregrasp = np.array(solve_ik_for_pose(
                     plant=self._plant,
@@ -841,11 +685,9 @@ class PlannerSystem(LeafSystem):
                 print(f"    Grasp IK: FAILED")
                 continue
             
-            # Compute lift pose (maintain grasp orientation)
             lift_pos = grasp_pose.translation() + np.array([0, 0, 0.3])
             X_lift = RigidTransform(grasp_pose.rotation(), lift_pos)
             
-            # Try IK for lift
             try:
                 q_lift = np.array(solve_ik_for_pose(
                     plant=self._plant,
@@ -859,36 +701,25 @@ class PlannerSystem(LeafSystem):
                 print(f"    Lift IK: FAILED")
                 continue
             
-            # Compute drop pose (flat/flush - gripper x-z plane parallel to ground)
             drop_pos = np.array([0.5, -0.5, lift_pos[2]])
             
-            # Make gripper flat: y-axis points down, x-z plane is horizontal
-            # Get grasp x-axis and project to horizontal plane
-            grasp_x_world = grasp_pose.rotation().matrix()[:, 0]  # Gripper x-axis in world frame
+            # Make gripper flat for drop
+            grasp_x_world = grasp_pose.rotation().matrix()[:, 0]
             grasp_x_horizontal = np.array([grasp_x_world[0], grasp_x_world[1], 0.0])
             grasp_x_horizontal_norm = np.linalg.norm(grasp_x_horizontal)
             if grasp_x_horizontal_norm > 1e-6:
                 gripper_x = grasp_x_horizontal / grasp_x_horizontal_norm
             else:
-                # Fallback: use world x-axis if grasp x is vertical
                 gripper_x = np.array([1.0, 0.0, 0.0])
             
-            # Gripper y-axis points down (world -z)
             gripper_y = np.array([0.0, 0.0, -1.0])
-            
-            # Gripper z-axis is cross product (ensures right-handed frame)
             gripper_z = np.cross(gripper_x, gripper_y)
             gripper_z = gripper_z / np.linalg.norm(gripper_z)
-            
-            # Recompute x to ensure orthonormality
             gripper_x = np.cross(gripper_y, gripper_z)
             gripper_x = gripper_x / np.linalg.norm(gripper_x)
-            
-            # Construct rotation matrix with flat orientation
             R_drop_flat = RotationMatrix(np.column_stack([gripper_x, gripper_y, gripper_z]))
             X_drop = RigidTransform(R_drop_flat, drop_pos)
             
-            # Try IK for drop
             try:
                 q_drop = np.array(solve_ik_for_pose(
                     plant=self._plant,
@@ -903,15 +734,12 @@ class PlannerSystem(LeafSystem):
                 print(f"    Drop IK: FAILED")
                 continue
             
-            # All IK checks passed! Use this grasp
             print(f"\n  SUCCESS! Using grasp candidate {candidate_idx + 1} (cost={cost:.3f})")
             
-            # Store the validated grasp and pregrasp poses
             self._best_grasp_pose = grasp_pose
             self._pregrasp_pose = pregrasp_pose
             self._drop_pose = X_drop
             
-            # Visualize the selected grasp
             rpy_grasp = RollPitchYaw(grasp_pose.rotation())
             print(f"    Position: {grasp_pose.translation()}")
             print(f"    RPY: [{rpy_grasp.roll_angle():.3f}, {rpy_grasp.pitch_angle():.3f}, {rpy_grasp.yaw_angle():.3f}]")
@@ -926,24 +754,20 @@ class PlannerSystem(LeafSystem):
             
             break
         else:
-            # No candidate passed all IK checks
             print(f"\n  All {len(self._grasp_candidates)} grasp candidates failed IK validation!")
             return False
         
-        # Add intermediate waypoints for straight-up lift motion
-        # This ensures the arm moves straight up in Cartesian space, not a curved path
+        # Compute intermediate lift waypoints for straight-up motion
         print(f"\n  Computing intermediate waypoints for straight-up lift...")
         grasp_pos = self._best_grasp_pose.translation()
         lift_intermediate_waypoints = []
         lift_intermediate_qs = []
         
-        # Create waypoints at 0.1m, 0.2m, and 0.3m above grasp (same X, Y, orientation)
         for z_offset in [0.1, 0.2, 0.3]:
             intermediate_pos = np.array([grasp_pos[0], grasp_pos[1], grasp_pos[2] + z_offset])
             X_intermediate = RigidTransform(self._best_grasp_pose.rotation(), intermediate_pos)
             
             try:
-                # Use previous waypoint as seed (or grasp if first)
                 q_seed = lift_intermediate_qs[-1] if lift_intermediate_qs else q_grasp
                 q_intermediate = np.array(solve_ik_for_pose(
                     plant=self._plant,
@@ -958,41 +782,31 @@ class PlannerSystem(LeafSystem):
                 print(f"    Intermediate waypoint at +{z_offset:.1f}m: OK")
             except RuntimeError as e:
                 print(f"    Intermediate waypoint at +{z_offset:.1f}m: FAILED ({e})")
-                # If intermediate fails, fall back to direct grasp->lift
                 lift_intermediate_waypoints = []
                 lift_intermediate_qs = []
                 break
         
-        # If we successfully computed intermediate waypoints, use them
-        # Otherwise, fall back to direct grasp->lift
         use_intermediate_lift = len(lift_intermediate_qs) > 0
         if use_intermediate_lift:
             print(f"  Using {len(lift_intermediate_qs)} intermediate waypoints for straight-up lift")
         else:
             print(f"  Falling back to direct grasp->lift (no intermediate waypoints)")
         
-        # Add intermediate waypoints for horizontal transfer (lift → drop)
-        # This ensures the arm moves smoothly horizontally, not in a curved/waving path
+        # Compute intermediate transfer waypoints
         print(f"\n  Computing intermediate waypoints for horizontal transfer...")
         transfer_intermediate_qs = []
         
-        # Compute intermediate positions (interpolate XY, keep Z constant)
-        lift_xy = lift_pos[:2]  # [x, y] at lift
-        drop_xy = drop_pos[:2]  # [x, y] at drop
-        transfer_z = lift_pos[2]  # Constant Z height
+        lift_xy = lift_pos[:2]
+        drop_xy = drop_pos[:2]
+        transfer_z = lift_pos[2]
         
-        # Get orientations for interpolation
-        R_lift = self._best_grasp_pose.rotation()  # Grasp orientation at lift
-        R_drop = self._drop_pose.rotation()  # Flat orientation at drop
+        R_lift = self._best_grasp_pose.rotation()
+        R_drop = self._drop_pose.rotation()
         
-        # Use 3 intermediate waypoints at 25%, 50%, 75% of the way
         for i, alpha in enumerate([0.25, 0.5, 0.75]):
-            # Interpolate position linearly
             intermediate_xy = lift_xy + alpha * (drop_xy - lift_xy)
             intermediate_pos = np.array([intermediate_xy[0], intermediate_xy[1], transfer_z])
             
-            # Keep grasp orientation for first two waypoints (25%, 50%), switch to flat at 75%
-            # This ensures smooth motion and only rotates near the end
             if alpha < 0.75:
                 R_intermediate = R_lift
             else:
@@ -1001,7 +815,6 @@ class PlannerSystem(LeafSystem):
             X_intermediate = RigidTransform(R_intermediate, intermediate_pos)
             
             try:
-                # Use previous waypoint as seed (or q_lift if first)
                 q_seed = transfer_intermediate_qs[-1] if transfer_intermediate_qs else q_lift
                 q_intermediate = np.array(solve_ik_for_pose(
                     plant=self._plant,
@@ -1015,24 +828,20 @@ class PlannerSystem(LeafSystem):
                 print(f"    Transfer waypoint at {int(alpha*100)}%: OK")
             except RuntimeError as e:
                 print(f"    Transfer waypoint at {int(alpha*100)}%: FAILED ({e})")
-                # Fall back to direct lift→drop
                 transfer_intermediate_qs = []
                 break
         
-        # Check if transfer waypoints were successful
         use_intermediate_transfer = len(transfer_intermediate_qs) > 0
         if use_intermediate_transfer:
             print(f"  Using {len(transfer_intermediate_qs)} intermediate waypoints for horizontal transfer")
         else:
             print(f"  Falling back to direct lift->drop (no intermediate waypoints)")
         
-        # Calculate joint space distances
         dist_current_to_home = np.linalg.norm(self._q_home - q_current)
         dist_home_to_pregrasp = np.linalg.norm(q_pregrasp - self._q_home)
         dist_current_to_pregrasp = np.linalg.norm(q_pregrasp - q_current)
         dist_pregrasp_to_grasp = np.linalg.norm(q_grasp - q_pregrasp)
         
-        # Compute distances for lift segments
         if use_intermediate_lift:
             dist_grasp_to_lift_0_1 = np.linalg.norm(lift_intermediate_qs[0] - q_grasp)
             dist_lift_0_1_to_0_2 = np.linalg.norm(lift_intermediate_qs[1] - lift_intermediate_qs[0])
@@ -1041,7 +850,6 @@ class PlannerSystem(LeafSystem):
         else:
             dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
         
-        # Compute distances for transfer segments (lift → drop)
         if use_intermediate_transfer:
             dist_lift_to_transfer_25 = np.linalg.norm(transfer_intermediate_qs[0] - q_lift)
             dist_transfer_25_to_50 = np.linalg.norm(transfer_intermediate_qs[1] - transfer_intermediate_qs[0])
@@ -1059,11 +867,7 @@ class PlannerSystem(LeafSystem):
         print(f"    grasp → lift:                {dist_grasp_to_lift:.4f} rad")
         print(f"    lift → drop:                 {dist_lift_to_drop:.4f} rad")
         
-        # Decide whether to use home as intermediate waypoint
-        # If direct path is much longer than going through home, use home
         use_home_waypoint = dist_current_to_pregrasp > (dist_current_to_home + dist_home_to_pregrasp) * 0.8
-        
-        # Time scaling: ~1 second per radian of joint motion (smooth motion)
         time_per_rad = 1.0
         
         if use_home_waypoint:
@@ -1072,9 +876,8 @@ class PlannerSystem(LeafSystem):
             t_home = dist_current_to_home * time_per_rad
             t_pregrasp = t_home + dist_home_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-            t_grasp_end = t_grasp_start + 2.0  # 2 seconds hold for gripper to firmly close
+            t_grasp_end = t_grasp_start + 2.0
             
-            # Build trajectory with optional intermediate lift and transfer waypoints
             if use_intermediate_lift:
                 t_lift_0_1 = t_grasp_end + dist_grasp_to_lift_0_1 * time_per_rad
                 t_lift_0_2 = t_lift_0_1 + dist_lift_0_1_to_0_2 * time_per_rad
@@ -1090,10 +893,9 @@ class PlannerSystem(LeafSystem):
             else:
                 t_drop = t_lift + dist_lift_to_drop * time_per_rad
             
-            t_release = t_drop + 0.5  # 0.5 second hold at drop before release
-            t_end = t_release + 0.5   # 0.5 second after release
+            t_release = t_drop + 0.5
+            t_end = t_release + 0.5
             
-            # Build times and waypoints arrays based on which intermediate waypoints are used
             times_list = [0.0, t_home, t_pregrasp, t_grasp_start, t_grasp_end]
             waypoints_list = [q_current, self._q_home, q_pregrasp, q_grasp, q_grasp]
             
@@ -1121,9 +923,8 @@ class PlannerSystem(LeafSystem):
             
             t_pregrasp = dist_current_to_pregrasp * time_per_rad
             t_grasp_start = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-            t_grasp_end = t_grasp_start + 2.0  # 2 seconds hold for gripper to firmly close
+            t_grasp_end = t_grasp_start + 2.0
             
-            # Build trajectory with optional intermediate lift and transfer waypoints
             if use_intermediate_lift:
                 t_lift_0_1 = t_grasp_end + dist_grasp_to_lift_0_1 * time_per_rad
                 t_lift_0_2 = t_lift_0_1 + dist_lift_0_1_to_0_2 * time_per_rad
@@ -1139,10 +940,9 @@ class PlannerSystem(LeafSystem):
             else:
                 t_drop = t_lift + dist_lift_to_drop * time_per_rad
             
-            t_release = t_drop + 0.5  # 0.5 second hold at drop before release
-            t_end = t_release + 0.5   # 0.5 second after release
+            t_release = t_drop + 0.5
+            t_end = t_release + 0.5
             
-            # Build times and waypoints arrays based on which intermediate waypoints are used
             times_list = [0.0, t_pregrasp, t_grasp_start, t_grasp_end]
             waypoints_list = [q_current, q_pregrasp, q_grasp, q_grasp]
             
@@ -1161,21 +961,14 @@ class PlannerSystem(LeafSystem):
                 waypoints_list.append(q_drop)
             
             times_list.extend([t_release, t_end])
-            waypoints_list.extend([q_drop, q_drop])  # Hold at drop, stay after release
+            waypoints_list.extend([q_drop, q_drop])
             
             times = np.array(times_list)
             waypoints = np.column_stack(waypoints_list)
         
-        # Create trajectory using first-order hold (linear interpolation)
         self._grasp_trajectory = PiecewisePolynomial.FirstOrderHold(times, waypoints)
-        
-        # Set gripper close time (gripper closes at grasp_start)
         self._grasp_close_time = t_grasp_start
-        
-        # Set gripper open time (gripper opens at release)
         self._grasp_open_time = t_release
-        
-        # Store final position
         self._grasp_end_position = q_drop
         
         print(f"\n  Grasp trajectory created:")
@@ -1183,7 +976,6 @@ class PlannerSystem(LeafSystem):
         print(f"    Gripper closes at: {t_grasp_start:.1f}s")
         print(f"    Gripper opens at: {t_release:.1f}s")
         
-        # Build waypoint description string
         waypoint_str = "current"
         if use_home_waypoint:
             waypoint_str += " → HOME"
@@ -1197,7 +989,6 @@ class PlannerSystem(LeafSystem):
         waypoint_str += " → drop → hold → release"
         print(f"    Waypoints: {waypoint_str}")
         
-        # Verify cartesian positions
         print(f"\n  Expected cartesian positions:")
         print(f"    pregrasp: {np.round(self._pregrasp_pose.translation(), 4)}")
         print(f"    grasp:    {np.round(self._best_grasp_pose.translation(), 4)}")
@@ -1205,7 +996,6 @@ class PlannerSystem(LeafSystem):
         print(f"    drop:     {np.round(drop_pos, 4)}")
         print(f"    Z difference (pregrasp - grasp): {self._pregrasp_pose.translation()[2] - self._best_grasp_pose.translation()[2]:.3f}m")
         
-        # Store milestone times for logging during execution
         self._grasp_t_pregrasp = t_pregrasp
         self._grasp_t_grasp = t_grasp_start
         self._grasp_t_lift_start = t_grasp_end

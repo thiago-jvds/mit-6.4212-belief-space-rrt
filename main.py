@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-Main script - Unified RRBT-RRT Planning and Execution.
-
-Uses a PlannerSystem LeafSystem that integrates planning into the Drake
-simulation loop. The planner runs RRBT for information gathering, then
-RRT for reaching the goal, all within a single continuous simulation.
-
-Starts Meshcat on port 7000, loads the scenario, and keeps running
-until you press Ctrl+C.
-
-Usage:
-    python main.py
-
-Then open http://localhost:7000 in your browser.
-"""
+"""Unified RRBT-RRT planning and execution with Meshcat visualization."""
 
 import random
 import subprocess
@@ -46,57 +32,32 @@ from src.utils.config_loader import load_config
 from src.utils.camera_pose_manager import restore_camera_pose
 
 
-# ============================================================
-# RANDOM SEED CONFIGURATION - Set this for deterministic runs
-# ============================================================
 RANDOM_SEED = 7
-
-# Seed all random number generators for reproducibility
-np.random.seed(RANDOM_SEED)  # Global numpy random state (for external libraries)
-random.seed(RANDOM_SEED)     # Global Python random (for manipulation library)
-np_rng = np.random.default_rng(seed=RANDOM_SEED)  # NumPy Generator for internal use
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
+np_rng = np.random.default_rng(seed=RANDOM_SEED)
 
 
 def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin, np_rng: np.random.Generator):        
-    """
-    Place the mustard bottle randomly within the specified bin.
-    
-    Args:
-        meshcat: Meshcat visualizer instance
-        plant: MultibodyPlant reference
-        plant_context: Plant context from simulator
-        true_bin: Bin index (0 or 1) to place the bottle in
-        np_rng: Numpy random generator
-        
-    Returns:
-        X_WM: RigidTransform of mustard bottle in world frame
-    """
-    # Get true bin's pose in world frame
+    """Place mustard bottle randomly within the specified bin. Returns X_WM."""
     true_bin_instance = plant.GetModelInstanceByName(f"bin{true_bin}")
     true_bin_body = plant.GetBodyByName("bin_base", true_bin_instance)
     X_WB = plant.EvalBodyPoseInWorld(plant_context, true_bin_body)
     
-    # Generate random position and orientation for mustard bottle
     random_rotation = RollPitchYaw(-np.pi/2, 0, np_rng.uniform(0, 2*np.pi)).ToRotationMatrix()
-
-    # Random XY position within bin bounds, Z height above bin
     x_offset = -0.01
-    x_range = (-0.01+x_offset, 0.01+x_offset)  # min, max for x offset from bin center
-    y_range = (-0.15, 0.15)  # min, max for y offset from bin center
-    random_z = 0.2  # Height above bin
+    x_range = (-0.01+x_offset, 0.01+x_offset)
+    y_range = (-0.15, 0.15)
+    random_z = 0.2
 
     random_x = np_rng.uniform(x_range[0], x_range[1])
     random_y = np_rng.uniform(y_range[0], y_range[1])
 
-    # Visualize the random initialization space as a translucent green box
     box_width = x_range[1] - x_range[0]
     box_depth = y_range[1] - y_range[0]
-    box_height = 0.02  # Thin box to show the XY region at the drop height
-
+    box_height = 0.02
     init_space_box = Box(box_width, box_depth, box_height)
-    # meshcat.SetObject("init_space", init_space_box, Rgba(0, 1, 0, 0.3))  # Translucent green
 
-    # Position the box at the center of the initialization region (relative to bin)
     box_center_in_bin = [
         (x_range[0] + x_range[1]) / 2,
         (y_range[0] + y_range[1]) / 2,
@@ -105,11 +66,9 @@ def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin
     X_WBox = X_WB.multiply(RigidTransform(box_center_in_bin))
     meshcat.SetTransform("init_space", X_WBox)
 
-    # Create transform relative to bin, then convert to world frame
     X_BM = RigidTransform(random_rotation, [random_x, random_y, random_z])
     X_WM = X_WB.multiply(X_BM)
 
-    # Set mustard bottle pose
     mustard_body = plant.GetBodyByName("base_link_mustard")
     plant.SetFreeBodyPose(plant_context, mustard_body, X_WM)
     
@@ -122,46 +81,19 @@ def place_mustard_bottle_randomly_in_bin(meshcat, plant, plant_context, true_bin
 
 
 def probability_to_color(prob: float) -> tuple:
-    """
-    Convert probability to RGB color: red (0) - yellow (0.5) - green (1).
-    
-    Matches the color scheme used in BeliefBarChartSystem for Meshcat visualization.
-    
-    Args:
-        prob: Probability value in [0, 1]
-        
-    Returns:
-        Tuple of (r, g, b) values in [0, 1]
-    """
+    """Convert probability to RGB color: red (0) - yellow (0.5) - green (1)."""
     prob = np.clip(prob, 0.0, 1.0)
     if prob <= 0.5:
-        # Red to Yellow: R=1, G increases from 0 to 1
         r, g, b = 1.0, prob * 2.0, 0.0
     else:
-        # Yellow to Green: R decreases from 1 to 0, G=1
         r, g, b = 1.0 - (prob - 0.5) * 2.0, 1.0, 0.0
     return (r, g, b)
 
 
 def plot_belief_bar_chart(belief: np.ndarray, bins: list, title: str, filename: str, 
                           true_bin: int = None, confidence_threshold: float = None):
-    """
-    Generate and save a matplotlib bar chart for belief visualization.
-    
-    Uses dynamic coloring: red (0) - yellow (0.5) - green (1) based on probability.
-    
-    Args:
-        belief: Probability vector [P(bin0), P(bin1), ...]
-        bins: List of bin labels for x-axis
-        title: Plot title
-        filename: Output filename for the saved plot
-        true_bin: Optional index of the true bin (for reference in title)
-        confidence_threshold: Optional misclassification risk threshold for RRBT goal condition.
-                              If provided, draws a horizontal line at y = 1 - threshold.
-    """
+    """Generate and save a matplotlib bar chart for belief visualization."""
     plt.figure(figsize=(8, 6))
-    
-    # Dynamic colors based on probability: red (0) - yellow (0.5) - green (1)
     colors = [probability_to_color(p) for p in belief]
     bars = plt.bar(bins, belief, color=colors, alpha=0.8, edgecolor='black')
     
@@ -171,14 +103,12 @@ def plot_belief_bar_chart(belief: np.ndarray, bins: list, title: str, filename: 
     plt.ylim(0, 1.05)
     plt.grid(axis='y', linestyle='--', alpha=0.6)
     
-    # Add confidence threshold line if provided
     if confidence_threshold is not None:
         threshold_y = 1.0 - confidence_threshold
         plt.axhline(y=threshold_y, color='black', linestyle='--', linewidth=2, 
                     label=f'Confidence Threshold ({threshold_y:.2f})')
         plt.legend(loc='upper right')
     
-    # Add value labels on top of bars
     for bar in bars:
         height = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
@@ -191,13 +121,7 @@ def plot_belief_bar_chart(belief: np.ndarray, bins: list, title: str, filename: 
 
 
 def save_block_diagram(diagram, output_stem: Path):
-    """
-    Save the Drake diagram structure to Graphviz .dot and .png files.
-    
-    Args:
-        diagram: Drake Diagram instance
-        output_stem: Path stem (without extension) for output files
-    """
+    """Save Drake diagram to Graphviz .dot and .png files."""
     output_stem = Path(output_stem)
     if not output_stem.is_absolute():
         output_stem = Path.cwd() / output_stem
@@ -250,7 +174,6 @@ def main():
     print("Unified RRBT-RRT Planning and Execution")
     print("=" * 60)
 
-    # Load configuration
     config = load_config()
     print("Loaded Configuration:")
     print(f"    > Physics: Q_scale={config.physics.process_noise_scale}")
@@ -260,7 +183,6 @@ def main():
     )
     print()
 
-    # Start Meshcat
     try:
         params = MeshcatParams()
         params.port = 7000
@@ -272,45 +194,26 @@ def main():
         print("  Please stop any other Meshcat servers or Python processes using that port.")
         raise
 
-    # Restore saved camera pose if available
     if args.visualize == "True":
         restore_camera_pose(meshcat)
 
-    # Load scenario
     scenario_path = Path(__file__).parent / "config" / "scenario.yaml"
     with open(scenario_path, "r") as f:
         scenario = LoadScenario(data=f.read())
 
-    # ============================================================
-    # BUILD UNIFIED DIAGRAM
-    # ============================================================
     print("\nBuilding unified diagram...")
     builder = DiagramBuilder()
-    
-    # Add hardware station
     station = builder.AddSystem(MakeHardwareStation(scenario=scenario, meshcat=meshcat))
     station.set_name("HardwareStation")
     plant = station.GetSubsystemByName("plant")
 
-    # ============================================================
-    # GET BIN TRANSFORMS FOR BELIEF BAR CHART POSITIONING
-    # ============================================================
-    # Create a temporary context to get bin poses (determined by model file)
     temp_plant_context = plant.CreateDefaultContext()
-    
-    # Get bin0 transform
     bin0_instance = plant.GetModelInstanceByName("bin0")
     bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
     X_W_bin0 = plant.EvalBodyPoseInWorld(temp_plant_context, bin0_body)
-    
-    # Get bin1 transform
     bin1_instance = plant.GetModelInstanceByName("bin1")
     bin1_body = plant.GetBodyByName("bin_base", bin1_instance)
     X_W_bin1 = plant.EvalBodyPoseInWorld(temp_plant_context, bin1_body)
-    
-    # Define relative transform from bin frame to chart position
-    # "Top right edge" of bin: positive X (forward), negative Y (right), raised Z
-    # Bin dimensions are roughly 0.6m x 0.4m, so offset to corner and above
     X_bin0_chart = RigidTransform([-0.22, 0.29, 0.21])
     X_bin1_chart = RigidTransform([-0.22, -0.29, 0.21])
     
@@ -319,23 +222,17 @@ def main():
     print(f"  Chart offset from bin0: {X_bin0_chart.translation()}")
     print(f"  Chart offset from bin1: {X_bin1_chart.translation()}")
 
-    # Add PlannerSystem (replaces ConstantVectorSource)
     planner = builder.AddSystem(PlannerSystem(plant, config, meshcat, scenario_path, rng=np_rng))
     planner.set_name("PlannerSystem")
-    
-    # Connect planner to robot arm
     builder.Connect(
         planner.GetOutputPort("iiwa_position_command"),
         station.GetInputPort("iiwa.position")
     )
-
-    # Connect planner's gripper command to robot gripper
     builder.Connect(
         planner.GetOutputPort("wsg_position_command"),
         station.GetInputPort("wsg.position")
     )
 
-    # Add Perception System (LightDarkRegionSystem)
     bin_perception_sys = builder.AddSystem(
         BinLightDarkRegionSensorSystem(
             plant=plant,
@@ -347,13 +244,11 @@ def main():
         )
     )
     bin_perception_sys.set_name("LightDarkPerception")
-    # Connect perception to station output
     builder.Connect(
         station.GetOutputPort("iiwa.position_measured"),
         bin_perception_sys.GetInputPort("iiwa.position"),
     )
     
-    # Add Mustard Position Perception System
     mustard_position_perception_sys = builder.AddSystem(
         MustardPositionLightDarkRegionSensorSystem(
             plant=plant,
@@ -365,15 +260,11 @@ def main():
         )
     )
     mustard_position_perception_sys.set_name("MustardPositionPerception")
-    # Connect mustard position perception to station output
     builder.Connect(
         station.GetOutputPort("iiwa.position_measured"),
         mustard_position_perception_sys.GetInputPort("iiwa.position"),
     )
 
-    # Add Belief Estimator System (Discrete Bayes Filter)
-    # Note: true_bin will be set after we randomly choose it
-    # For now, use a placeholder value - it will be updated via configure
     belief_estimator = builder.AddSystem(
         BinBeliefEstimatorSystem(
             n_bins=2,
@@ -383,14 +274,11 @@ def main():
         )
     )
     belief_estimator.set_name("BinBeliefEstimator")
-    
-    # Connect estimator to perception's sensor_model output
     builder.Connect(
         bin_perception_sys.GetOutputPort("sensor_model"),
         belief_estimator.GetInputPort("sensor_model")
     )
 
-    # Add Belief Bar Chart Visualizer (positioned near each bin)
     belief_viz = builder.AddSystem(
         BeliefBarChartSystem(
             meshcat=meshcat,
@@ -404,16 +292,11 @@ def main():
         )
     )
     belief_viz.set_name("BeliefBarChart")
-    
-    # Connect visualizer to estimator output
     builder.Connect(
         belief_estimator.GetOutputPort("belief"),
         belief_viz.GetInputPort("belief")
     )
 
-    # ============================================================
-    # ADD POINT CLOUD GENERATION FROM CAMERAS
-    # ============================================================
     print("  Adding point cloud generation from cameras...")
     to_point_cloud = AddPointClouds(
         scenario=scenario,
@@ -422,24 +305,18 @@ def main():
         meshcat=None,  # Don't visualize continuously - we'll do it once
     )
     print(f"    Added point cloud converters for: {list(to_point_cloud.keys())}")
-    
-    # Export point cloud ports for one-time visualization
     point_cloud_output_ports = {}
     for camera_name, converter in to_point_cloud.items():
         port_name = f"{camera_name}_point_cloud"
         builder.ExportOutput(converter.get_output_port(), port_name)
         point_cloud_output_ports[camera_name] = port_name
 
-    # ============================================================
-    # ADD MUSTARD POSE ESTIMATOR SYSTEM
-    # ============================================================
     print("  Adding MustardPoseEstimatorSystem...")
     pose_estimator = builder.AddSystem(
         MustardPoseEstimatorSystem(meshcat=meshcat, n_bins=2)
     )
     pose_estimator.set_name("MustardPoseEstimator")
 
-    # Connect camera point clouds to pose estimator
     for i in range(6):
         camera_name = f"camera{i}"
         if camera_name in to_point_cloud:
@@ -451,31 +328,24 @@ def main():
         else:
             print(f"    WARNING: {camera_name} not found in point cloud converters!")
 
-    # Connect belief to pose estimator
     builder.Connect(
         belief_estimator.GetOutputPort("belief"),
         pose_estimator.GetInputPort("belief")
     )
     print("    Connected belief to pose estimator")
 
-    # Connect belief_confident trigger to pose estimator
-    # This triggers ICP estimation only when bin belief is confident
     builder.Connect(
         belief_estimator.GetOutputPort("belief_confident"),
         pose_estimator.GetInputPort("estimation_trigger")
     )
     print("    Connected belief_confident trigger to pose estimator")
 
-    # Connect pose estimator to planner
     builder.Connect(
         pose_estimator.GetOutputPort("estimated_pose"),
         planner.GetInputPort("estimated_mustard_pose")
     )
     print("    Connected pose estimator to planner")
 
-    # ============================================================
-    # ADD MUSTARD POSITION BELIEF ESTIMATOR (3D Kalman Filter)
-    # ============================================================
     print("  Adding MustardPositionBeliefEstimatorSystem...")
     mustard_belief_estimator = builder.AddSystem(
         MustardPositionBeliefEstimatorSystem(
@@ -484,34 +354,28 @@ def main():
     )
     mustard_belief_estimator.set_name("MustardPositionBeliefEstimator")
 
-    # Connect measurement variance from perception
     builder.Connect(
         mustard_position_perception_sys.GetOutputPort("measurement_variance"),
         mustard_belief_estimator.GetInputPort("measurement_variance")
     )
     print("    Connected measurement_variance from MustardPositionPerception")
 
-    # Connect estimated pose from ICP (for initial position)
     builder.Connect(
         pose_estimator.GetOutputPort("estimated_pose"),
         mustard_belief_estimator.GetInputPort("estimated_pose")
     )
     print("    Connected estimated_pose from MustardPoseEstimator")
 
-    # ============================================================
-    # ADD COVARIANCE ELLIPSOID VISUALIZER
-    # ============================================================
     print("  Adding CovarianceEllipsoidSystem...")
     covariance_viz = builder.AddSystem(
         CovarianceEllipsoidSystem(
             meshcat=meshcat,
-            scale_factor=3.0,  # 3-sigma ellipsoid
-            color=Rgba(1.0, 0.0, 0.0, 0.5),  # Red with 50% transparency
+            scale_factor=3.0,
+            color=Rgba(1.0, 0.0, 0.0, 0.5),
         )
     )
     covariance_viz.set_name("CovarianceEllipsoid")
 
-    # Connect position and covariance from belief estimator
     builder.Connect(
         mustard_belief_estimator.GetOutputPort("position_mean"),
         covariance_viz.GetInputPort("position")
@@ -522,108 +386,78 @@ def main():
     )
     print("    Connected position and covariance to ellipsoid visualizer")
 
-    # Connect covariance to planner for grasp planning
     builder.Connect(
         mustard_belief_estimator.GetOutputPort("covariance"),
         planner.GetInputPort("position_covariance")
     )
     print("    Connected covariance to planner for grasp planning")
 
-    # Build the diagram
     diagram = builder.Build()
     diagram.set_name("UnifiedPlanningDiagram")
 
-    # Optionally generate a block diagram and exit early
     if args.generate_block_diagram:
         print("\nGenerating block diagram...")
         save_block_diagram(diagram, Path(args.diagram_output_stem))
         print("Block diagram generated. Exiting before simulation.")
         return
 
-    # ============================================================
-    # INITIALIZE SIMULATOR AND ENVIRONMENT
-    # ============================================================
     print("\nInitializing simulator...")
     simulator = Simulator(diagram)
     simulator.set_target_realtime_rate(1.0)
 
-    # Visualize light region
     if args.visualize == "True":
-        # Visualize bin light region indicator
         meshcat.SetObject(
             "bin_light_region_indicator",
             Box(*config.simulation.bin_light_size),
-            Rgba(0, 1, 0, 0.3),  # Green, 0.3 Alpha
+            Rgba(0, 1, 0, 0.3),
         )
         meshcat.SetTransform(
             "bin_light_region_indicator",
             RigidTransform(RotationMatrix(), config.simulation.bin_light_center),
         )
-        # Visualize mustard position light region indicator (orange to distinguish)
         meshcat.SetObject(
             "mustard_position_light_region_indicator",
             Box(*config.simulation.mustard_position_light_size),
-            Rgba(1.0, 0.5, 0.0, 0.3),  # Orange, 0.3 Alpha
+            Rgba(1.0, 0.5, 0.0, 0.3),
         )
         meshcat.SetTransform(
             "mustard_position_light_region_indicator",
             RigidTransform(RotationMatrix(), config.simulation.mustard_position_light_center),
         )
 
-    # Step simulation briefly to initialize
     simulator.AdvanceTo(0.1)
 
-    # ============================================================
-    # SETUP ENVIRONMENT (PLACE MUSTARD BOTTLE)
-    # ============================================================
     print("\n" + "=" * 60)
     print("ENVIRONMENT SETUP")
     print("=" * 60)
 
-    # Get simulator context for environment setup
     sim_context = simulator.get_mutable_context()
     plant_context = plant.GetMyMutableContextFromRoot(sim_context)
 
-    # Randomly choose a true bin
     true_bin = np_rng.integers(0, 2)
     print(f"Randomly chosen true bin: {true_bin}")
 
-    # Place mustard bottle randomly in the true bin
     X_WM_mustard = place_mustard_bottle_randomly_in_bin(
         meshcat, plant, plant_context, true_bin, np_rng
     )
 
-    # Force publish to update Meshcat visualization with new mustard position
     diagram.ForcedPublish(sim_context)
 
-    # ============================================================
-    # LET THE MUSTARD BOTTLE SETTLE
-    # ============================================================
-    # The bottle is placed 0.2m above the bin and falls under gravity.
-    # We need to let physics simulation run so the bottle settles before
-    # collecting point clouds for pose estimation.
-    SETTLE_TIME = 2.0  # seconds for bottle to fall and settle
+    SETTLE_TIME = 2.0
     print(f"\nLetting mustard bottle settle for {SETTLE_TIME}s...")
     current_time = simulator.get_context().get_time()
     simulator.AdvanceTo(current_time + SETTLE_TIME)
     print(f"  Bottle settled. Simulation time: {simulator.get_context().get_time():.2f}s")
 
-    # Update belief estimator with correct true_bin
-    # Note: BeliefEstimatorSystem stores true_bin as instance variable
     belief_estimator._true_bin = true_bin
 
-    # ============================================================
-    # CONFIGURE PLANNER AND RUN SIMULATION
-    # ============================================================
     print("\n" + "=" * 60)
     print("STARTING UNIFIED PLANNING AND EXECUTION")
     print("=" * 60)
 
-    # Configure planner to start planning
     planner.configure_for_execution(true_bin, X_WM_mustard)
 
-    # Plot prior belief (uniform distribution before any sensing)
-    prior_belief = np.array([0.5, 0.5])  # Initial uniform belief
+    prior_belief = np.array([0.5, 0.5])
     plot_belief_bar_chart(
         belief=prior_belief,
         bins=['Bin 0', 'Bin 1'],
@@ -699,14 +533,11 @@ def main():
     except KeyboardInterrupt:
         print("\n\nSimulation interrupted by user.")
 
-    # Stop recording and publish
     meshcat.StopRecording()
     meshcat.PublishRecording()
 
     print("\nExecution complete! Replay available in Meshcat.")
     print("Press Ctrl+C to exit.")
-    
-    # Keep Meshcat alive for replay viewing
     try:
         while True:
             pass

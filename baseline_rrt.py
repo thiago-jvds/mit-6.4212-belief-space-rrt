@@ -94,17 +94,7 @@ def path_to_trajectory(path: list, time_per_segment: float = 0.02) -> PiecewiseP
 
 
 class BaselinePlannerSystem(LeafSystem):
-    """
-    Baseline RRT Planner - No belief-space planning, immediate predictions.
-    
-    This planner demonstrates "naive" behavior:
-    - Immediate bin prediction from 50/50 prior (coin flip)
-    - No information-gathering trajectory (no RRBT1)
-    - No uncertainty-reduction trajectory (no RRBT2)
-    - Samples from LARGE initial covariance
-    
-    Expected to fail most of the time.
-    """
+    """Baseline planner with immediate bin prediction and no uncertainty reduction."""
     
     def __init__(self, plant, config, meshcat, scenario_path, rng=None):
         LeafSystem.__init__(self)
@@ -181,8 +171,6 @@ class BaselinePlannerSystem(LeafSystem):
         # FK context for gripper visualization
         self._fk_plant_context = self._plant.CreateDefaultContext()
         self._gripper_body = self._plant.GetBodyByName("body", self._plant.GetModelInstanceByName("wsg"))
-        
-        # Input port: estimated mustard pose from MustardPoseEstimatorSystem
         self._pose_input_port = self.DeclareAbstractInputPort(
             "estimated_mustard_pose",
             AbstractValue.Make(RigidTransform())
@@ -420,12 +408,7 @@ class BaselinePlannerSystem(LeafSystem):
             print(f"  Prediction: WRONG (as expected ~50% of time)")
     
     def _run_grasp_planning(self):
-        """
-        BASELINE: Grasp planning with LARGE (unreduced) uncertainty.
-        
-        Key difference from RRBT: Uses initial large covariance, not reduced.
-        The sampled position is expected to be far from truth.
-        """
+        """Grasp planning with large unreduced uncertainty."""
         print(f"  Using LARGE covariance (NO uncertainty reduction):")
         print(f"    Covariance diagonal: {np.diag(self._large_covariance)}")
         print(f"    Initial uncertainty: {self._initial_uncertainty}")
@@ -707,21 +690,19 @@ class BaselinePlannerSystem(LeafSystem):
         dist_grasp_to_lift = np.linalg.norm(q_lift - q_grasp)
         dist_lift_to_drop = np.linalg.norm(q_drop - q_lift)
         
-        t_pregrasp = rrt_duration  # RRT ends at pregrasp
+        t_pregrasp = rrt_duration
         t_grasp = t_pregrasp + dist_pregrasp_to_grasp * time_per_rad
-        t_hold = t_grasp + 1.0  # Hold for gripper close
+        t_hold = t_grasp + 1.0
         t_lift = t_hold + dist_grasp_to_lift * time_per_rad
         t_drop = t_lift + dist_lift_to_drop * time_per_rad
         t_release = t_drop + 0.5
         t_end = t_release + 0.5
         
-        # Build times array: RRT waypoint times + IK segment times
         rrt_times = np.linspace(0, rrt_duration, len(self._rrt_path))
         ik_times = np.array([t_grasp, t_hold, t_lift, t_drop, t_release, t_end])
         times = np.concatenate([rrt_times, ik_times])
         
-        # Build waypoints array: RRT waypoints + IK waypoints
-        rrt_waypoints = np.array([np.array(q) for q in self._rrt_path]).T  # (7, n_rrt)
+        rrt_waypoints = np.array([np.array(q) for q in self._rrt_path]).T
         ik_waypoints = np.column_stack([
             q_grasp, q_grasp, q_lift, q_drop, q_drop, q_drop
         ])
@@ -901,29 +882,19 @@ def main():
     station.set_name("HardwareStation")
     plant = station.GetSubsystemByName("plant")
 
-    # ============================================================
-    # GET BIN TRANSFORMS FOR BELIEF BAR CHART POSITIONING
-    # ============================================================
     temp_plant_context = plant.CreateDefaultContext()
-    
-    # Get bin0 transform
     bin0_instance = plant.GetModelInstanceByName("bin0")
     bin0_body = plant.GetBodyByName("bin_base", bin0_instance)
     X_W_bin0 = plant.EvalBodyPoseInWorld(temp_plant_context, bin0_body)
-    
-    # Get bin1 transform
     bin1_instance = plant.GetModelInstanceByName("bin1")
     bin1_body = plant.GetBodyByName("bin_base", bin1_instance)
     X_W_bin1 = plant.EvalBodyPoseInWorld(temp_plant_context, bin1_body)
-    
-    # Define relative transform from bin frame to chart position
     X_bin0_chart = RigidTransform([-0.22, 0.29, 0.21])
     X_bin1_chart = RigidTransform([-0.22, -0.29, 0.21])
     
     print(f"  Bin0 position: {X_W_bin0.translation()}")
     print(f"  Bin1 position: {X_W_bin1.translation()}")
 
-    # Add baseline planner
     planner = builder.AddSystem(BaselinePlannerSystem(plant, config, meshcat, scenario_path, rng=np_rng))
     planner.set_name("BaselinePlanner")
     
@@ -936,10 +907,6 @@ def main():
         station.GetInputPort("wsg.position")
     )
 
-    # ============================================================
-    # ADD LIGHT/DARK PERCEPTION SYSTEMS
-    # ============================================================
-    # Add Bin Light/Dark Perception System
     print("  Adding BinLightDarkRegionSensorSystem...")
     bin_perception_sys = builder.AddSystem(
         BinLightDarkRegionSensorSystem(
@@ -957,7 +924,6 @@ def main():
         bin_perception_sys.GetInputPort("iiwa.position"),
     )
 
-    # Add Mustard Position Light/Dark Perception System
     print("  Adding MustardPositionLightDarkRegionSensorSystem...")
     mustard_position_perception_sys = builder.AddSystem(
         MustardPositionLightDarkRegionSensorSystem(
@@ -975,7 +941,6 @@ def main():
         mustard_position_perception_sys.GetInputPort("iiwa.position"),
     )
 
-    # Add point clouds
     print("  Adding point cloud generation...")
     to_point_cloud = AddPointClouds(
         scenario=scenario,
@@ -985,7 +950,6 @@ def main():
     )
     print(f"    Added point cloud converters for: {list(to_point_cloud.keys())}")
 
-    # Export point cloud ports for visualization/debugging
     point_cloud_output_ports = {}
     for camera_name, converter in to_point_cloud.items():
         port_name = f"{camera_name}_point_cloud"
@@ -1249,4 +1213,21 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+nExiting...")
+
+
+if __name__ == "__main__":
+    main()
+   print("\nExiting...")
+
+
+if __name__ == "__main__":
+    main()
+nExiting...")
+
+
+if __name__ == "__main__":
+    main()
+:
     main()

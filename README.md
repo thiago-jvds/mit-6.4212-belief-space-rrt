@@ -10,6 +10,10 @@
   <a href="results/RRBT_demo_of_success.mp4"><strong>Watch the Full Demo (MP4)</strong></a>
 </p>
 
+<p align="center">
+  <a href="https://youtu.be/j6uy53jciCc"><strong>Full Video Presentation (YouTube)</strong></a>
+</p>
+
 ---
 
 ## Paper
@@ -33,10 +37,6 @@ Robotic manipulation in real-world environments is fundamentally constrained by 
 We implement a hierarchical planning framework leveraging the **Rapidly-Exploring Random Belief Tree (RRBT)** structure to explicitly model both the discrete belief of the target bin and the continuous uncertainty of the object's position. Our planner reasons between informative ("Light") and uninformative ("Dark") sensing regions. The algorithm prioritizes two distinct search phases: first, navigating to resolve bin identity using a discrete Bayes filter, and second, refining the grasp pose using a Kalman filter. We benchmark this strategy against a deterministic RRT baseline.
 
 Our results demonstrate that coupling active information gathering with motion planning enables the robot to autonomously manage uncertainty, resulting in higher pick-and-place success rates and improved safety margins compared to uncertainty-agnostic methods. This paves the way for designing more robust service robots where external sensors could be highly unreliable.
-
-### Links
-
-- [Video Presentation (YouTube)](https://youtu.be/j6uy53jciCc)
 
 ### Key Features
 

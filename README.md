@@ -1,10 +1,14 @@
 # Search-Then-Commit: Multitask Belief Space Planning
 
 <p align="center">
-  <video src="results/RRBT_demo_of_success.mp4" autoplay loop muted playsinline width="800"></video>
+  <a href="results/RRBT_demo_of_success.mp4">
+    <img src="results/RRBT_demo_of_success.gif" alt="RRBT Demo" width="800" style="max-width: 100%;">
+  </a>
 </p>
 
-https://github.com/thiago-jvds/mit-6.4212-belief-space-rrt/raw/main/results/RRBT_demo_of_success.mp4
+<p align="center">
+  <a href="results/RRBT_demo_of_success.mp4"><strong>Watch the Full Demo (MP4)</strong></a>
+</p>
 
 ---
 

@@ -216,7 +216,6 @@ install/
 *.egg-info/
 
 # Data and large files
-results/
 *.log
 *.csv
 *.bag

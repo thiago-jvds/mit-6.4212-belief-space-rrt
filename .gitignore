@@ -220,6 +220,3 @@ install/
 *.log
 *.csv
 *.bag
-
-# Vscode
-.vscode/
